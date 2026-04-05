@@ -1,0 +1,16 @@
+# claude-cost configuration
+# Copy to ~/.config/claude-cost/config and edit as needed.
+# Format: shell-sourceable key=value pairs.
+
+# Timezone for date grouping (passed to ccusage --timezone)
+# Default: UTC
+TIMEZONE="UTC"
+
+# Pinned ccusage version (npm package)
+# Default: 18.0.10
+CCUSAGE_VERSION="18.0.10"
+
+# Scheduled collection time (used by launchd/systemd)
+# Default: 02:00
+SCHEDULE_HOUR=2
+SCHEDULE_MINUTE=0

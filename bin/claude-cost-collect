@@ -1,0 +1,117 @@
+#!/bin/bash
+# claude-cost-collect — Collect Claude Code usage from ccusage into SQLite
+# Designed to be run daily by launchd/systemd; handles backfill for missed days.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../lib/claude-cost-common.sh
+. "$SCRIPT_DIR/../lib/claude-cost-common.sh"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"
+}
+
+# --- Lock mechanism ---
+cleanup_lock() {
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "ERROR: Another instance is running (lock exists). Exiting."
+    exit 1
+fi
+trap cleanup_lock EXIT
+
+# --- Ensure DB and schema exist ---
+init_db() {
+    sqlite3 "$DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS daily_usage (
+    date       TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    input_tokens      INTEGER DEFAULT 0,
+    output_tokens     INTEGER DEFAULT 0,
+    cache_creation_tokens INTEGER DEFAULT 0,
+    cache_read_tokens    INTEGER DEFAULT 0,
+    cost_usd   REAL DEFAULT 0.0,
+    PRIMARY KEY (date, model)
+);
+
+CREATE TABLE IF NOT EXISTS collect_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+SQL
+}
+
+mkdir -p "$(dirname "$LOG")"
+init_db
+
+# --- Determine date range ---
+LAST_COLLECTED=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date';" 2>/dev/null || echo "")
+YESTERDAY=$(yesterday)
+
+if [[ -n "$LAST_COLLECTED" && ! "$LAST_COLLECTED" < "$YESTERDAY" ]]; then
+    log "INFO: Already up to date (last_collected=$LAST_COLLECTED, yesterday=$YESTERDAY). Nothing to do."
+    exit 0
+fi
+
+log "INFO: Starting collection. last_collected=${LAST_COLLECTED:-<none>}, yesterday=$YESTERDAY"
+
+# --- Run ccusage ---
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"; cleanup_lock' EXIT
+
+if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$TMPFILE" 2>> "$LOG"; then
+    log "ERROR: ccusage failed. Not updating watermark."
+    exit 1
+fi
+
+# Validate JSON
+if ! jq empty "$TMPFILE" 2>/dev/null; then
+    log "ERROR: ccusage output is not valid JSON. Not updating watermark."
+    exit 1
+fi
+
+# --- Parse and insert (single transaction) ---
+ROWS=$(jq -r --arg yesterday "$YESTERDAY" --arg last "${LAST_COLLECTED:-}" '
+    .daily[]
+    | select(.date <= $yesterday)
+    | select($last == "" or .date > $last)
+    | .date as $d
+    | .modelBreakdowns[]
+    | [$d, .modelName,
+       (.inputTokens // 0),
+       (.outputTokens // 0),
+       (.cacheCreationTokens // 0),
+       (.cacheReadTokens // 0),
+       (.cost // 0)]
+    | @tsv
+' "$TMPFILE")
+
+if [ -z "$ROWS" ]; then
+    log "INFO: No new data to insert."
+    exit 0
+fi
+
+ROWS_BEFORE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
+
+{
+    echo "BEGIN;"
+    while IFS=$'\t' read -r dt model input output cache_create cache_read cost; do
+        model_escaped="${model//\'/\'\'}"
+        echo "INSERT OR REPLACE INTO daily_usage (date, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) VALUES ('$dt', '$model_escaped', $input, $output, $cache_create, $cache_read, $cost);"
+    done <<< "$ROWS"
+    echo "COMMIT;"
+} | sqlite3 "$DB"
+
+# --- Update watermark from DB ---
+ROWS_AFTER=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
+INSERTED=$((ROWS_AFTER - ROWS_BEFORE))
+MAX_DATE=$(sqlite3 "$DB" "SELECT MAX(date) FROM daily_usage WHERE date <= '$YESTERDAY';")
+
+if [ -n "$MAX_DATE" ]; then
+    sqlite3 "$DB" "INSERT OR REPLACE INTO collect_metadata (key, value) VALUES ('last_collected_date', '$MAX_DATE');"
+    log "INFO: Upserted data ($INSERTED new rows, total $ROWS_AFTER). Watermark updated to $MAX_DATE."
+else
+    log "INFO: No rows inserted."
+fi

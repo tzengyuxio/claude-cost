@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Claude Code usage collection
+
+[Timer]
+OnCalendar=*-*-* %%HOUR%%:%%MINUTE%%:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

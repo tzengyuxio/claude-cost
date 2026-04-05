@@ -1,0 +1,305 @@
+#!/bin/bash
+# claude-cost-report — Query Claude Code usage from SQLite
+# Subcommands: daily, daily-total, monthly, summary, csv
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../lib/claude-cost-common.sh
+. "$SCRIPT_DIR/../lib/claude-cost-common.sh"
+
+if [ ! -f "$DB" ]; then
+    echo "Error: Database not found at $DB" >&2
+    echo "Run claude-cost-collect first." >&2
+    exit 1
+fi
+
+# --- Formatting helpers ---
+
+# Render a table with right-aligned numeric columns.
+# Input: tab-separated rows from sqlite3 (.mode tabs + .headers on)
+# Args: $1 = comma-separated list of right-aligned column indices (0-based), or "auto"
+render_table() {
+    local ralign="${1:-auto}"
+    awk -F'\t' -v ralign="$ralign" '
+    {
+        for (i = 1; i <= NF; i++) {
+            gsub(/^[ \t]+|[ \t]+$/, "", $i)
+            key = NR "," i
+            data[key] = $i
+            len = length($i)
+            if (len > width[i]) width[i] = len
+        }
+        cols = NF
+        rows = NR
+    }
+    END {
+        if (rows == 0) exit
+
+        # Determine right-aligned columns
+        if (ralign == "auto") {
+            for (i = 1; i <= cols; i++) {
+                h = tolower(data["1," i])
+                if (h ~ /(tok|token|cost|avg|pct|day|models|active|total|cache|rank)/) {
+                    is_right[i] = 1
+                }
+            }
+        } else {
+            split(ralign, ra, ",")
+            for (k in ra) {
+                is_right[ra[k] + 1] = 1
+            }
+        }
+
+        # Header
+        line = ""
+        for (i = 1; i <= cols; i++) {
+            if (is_right[i])
+                fmt = "%" width[i] "s"
+            else
+                fmt = "%-" width[i] "s"
+            if (i > 1) line = line "  "
+            line = line sprintf(fmt, data["1," i])
+        }
+        print line
+
+        # Separator
+        sep = ""
+        for (i = 1; i <= cols; i++) {
+            if (i > 1) sep = sep "  "
+            for (j = 0; j < width[i]; j++) sep = sep "-"
+        }
+        print sep
+
+        # Data rows
+        for (r = 2; r <= rows; r++) {
+            line = ""
+            for (i = 1; i <= cols; i++) {
+                if (is_right[i])
+                    fmt = "%" width[i] "s"
+                else
+                    fmt = "%-" width[i] "s"
+                if (i > 1) line = line "  "
+                line = line sprintf(fmt, data[r "," i])
+            }
+            print line
+        }
+    }'
+}
+
+section() {
+    echo ""
+    echo "  $1"
+    echo ""
+}
+
+query_table() {
+    local sql="$1"
+    local ralign="${2:-auto}"
+    sqlite3 "$DB" <<SQL | render_table "$ralign"
+.mode tabs
+.headers on
+$sql
+SQL
+}
+
+# --- Args ---
+
+usage() {
+    cat <<'EOF'
+Usage: claude-cost-report <command> [options]
+
+Commands:
+  daily       [--last N]      Last N days per-model breakdown (default: 30)
+  daily-total [--last N]      Last N days aggregated totals (default: 30)
+  weekly      [--last N]      Last N ISO weeks summary (default: 8)
+  monthly     [--last N]      Last N months summary (default: 6)
+  summary                     Overall usage summary
+  csv         [--output FILE] Export all data as CSV
+
+Options:
+  --last N     Number of days/months to show
+  --output F   CSV output file (default: stdout)
+  --version    Show version
+EOF
+    exit 1
+}
+
+parse_last() {
+    local default="$1"; shift
+    local last="$default"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --last) last="$2"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+    done
+    echo "$last"
+}
+
+# --- Subcommands ---
+
+cmd_daily() {
+    local last
+    last=$(parse_last 30 "$@")
+
+    section "Daily Usage (last ${last} days, per model)"
+    query_table "
+SELECT
+    date,
+    model,
+    printf('%,d', input_tokens) AS input_tok,
+    printf('%,d', output_tokens) AS output_tok,
+    printf('%,d', cache_creation_tokens) AS cache_create,
+    printf('%,d', cache_read_tokens) AS cache_read,
+    printf('\$%.4f', cost_usd) AS cost
+FROM daily_usage
+WHERE date >= date('now', '-${last} days')
+ORDER BY date DESC, cost_usd DESC;
+"
+}
+
+cmd_daily_total() {
+    local last
+    last=$(parse_last 30 "$@")
+
+    section "Daily Usage (last ${last} days, aggregated)"
+    query_table "
+SELECT
+    date,
+    printf('%,d', SUM(input_tokens)) AS input_tok,
+    printf('%,d', SUM(output_tokens)) AS output_tok,
+    printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
+    printf('%,d', SUM(cache_read_tokens)) AS cache_read,
+    printf('\$%.4f', SUM(cost_usd)) AS total_cost,
+    COUNT(DISTINCT model) AS models
+FROM daily_usage
+WHERE date >= date('now', '-${last} days')
+GROUP BY date
+ORDER BY date DESC;
+"
+}
+
+cmd_monthly() {
+    local last
+    last=$(parse_last 6 "$@")
+
+    section "Monthly Usage (last ${last} months)"
+    query_table "
+SELECT
+    strftime('%Y-%m', date) AS month,
+    printf('%,d', SUM(input_tokens)) AS input_tok,
+    printf('%,d', SUM(output_tokens)) AS output_tok,
+    printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
+    printf('%,d', SUM(cache_read_tokens)) AS cache_read,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
+    COUNT(DISTINCT date) AS active_days
+FROM daily_usage
+WHERE strftime('%Y-%m', date) >= strftime('%Y-%m', date('now', '-${last} months'))
+GROUP BY month
+ORDER BY month DESC;
+"
+}
+
+cmd_weekly() {
+    local last
+    last=$(parse_last 8 "$@")
+    local days=$((last * 7))
+
+    section "Weekly Usage (last ${last} weeks)"
+    query_table "
+WITH base AS (
+    SELECT *,
+        date(date, CAST((3 - (CAST(strftime('%w', date) AS INTEGER) + 6) % 7) AS TEXT) || ' days') AS thursday
+    FROM daily_usage
+    WHERE date >= date('now', '-${days} days')
+)
+SELECT
+    strftime('%Y-W', thursday) || printf('%02d', (CAST(strftime('%j', thursday) AS INTEGER) + 6) / 7) AS week,
+    printf('%,d', SUM(input_tokens)) AS input_tok,
+    printf('%,d', SUM(output_tokens)) AS output_tok,
+    printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
+    printf('%,d', SUM(cache_read_tokens)) AS cache_read,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
+    COUNT(DISTINCT date) AS active_days
+FROM base
+GROUP BY week
+ORDER BY week DESC;
+"
+}
+
+cmd_summary() {
+    section "Overview"
+    query_table "
+SELECT
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily,
+    printf('\$%.2f', SUM(cost_usd) / MAX(1, (julianday(MAX(date)) - julianday(MIN(date))) / 30.0)) AS avg_monthly,
+    COUNT(DISTINCT date) AS active_days,
+    MIN(date) AS first_date,
+    MAX(date) AS last_date
+FROM daily_usage;
+"
+
+    section "Most / Least Expensive Days"
+    query_table "
+SELECT '▲ max' AS rank, date, printf('\$%.2f', total) AS cost FROM (
+    SELECT date, SUM(cost_usd) AS total FROM daily_usage GROUP BY date ORDER BY total DESC LIMIT 1
+)
+UNION ALL
+SELECT '▼ min', date, printf('\$%.2f', total) FROM (
+    SELECT date, SUM(cost_usd) AS total FROM daily_usage GROUP BY date ORDER BY total ASC LIMIT 1
+);
+"
+
+    section "Cost by Model"
+    query_table "
+SELECT
+    model,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('%.1f%%', SUM(cost_usd) * 100.0 / (SELECT SUM(cost_usd) FROM daily_usage)) AS pct,
+    COUNT(DISTINCT date) AS days_used
+FROM daily_usage
+GROUP BY model
+ORDER BY SUM(cost_usd) DESC;
+"
+}
+
+cmd_csv() {
+    local output=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --output) output="$2"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+    done
+
+    local query="SELECT date, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM daily_usage ORDER BY date, model;"
+
+    if [ -n "$output" ]; then
+        sqlite3 -header -csv "$DB" "$query" > "$output"
+        echo "Exported to $output"
+    else
+        sqlite3 -header -csv "$DB" "$query"
+    fi
+}
+
+# --- Main ---
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+case "$1" in
+    daily)       shift; cmd_daily "$@" ;;
+    daily-total) shift; cmd_daily_total "$@" ;;
+    weekly)      shift; cmd_weekly "$@" ;;
+    monthly)     shift; cmd_monthly "$@" ;;
+    summary)     shift; cmd_summary "$@" ;;
+    csv)         shift; cmd_csv "$@" ;;
+    --version)   echo "claude-cost-report $VERSION" ;;
+    *)           usage ;;
+esac

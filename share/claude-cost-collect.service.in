@@ -1,0 +1,6 @@
+[Unit]
+Description=Collect Claude Code usage data
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash %%COLLECT_SCRIPT%%
