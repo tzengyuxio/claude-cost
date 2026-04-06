@@ -6,7 +6,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../lib/claude-cost-common.sh
-. "$SCRIPT_DIR/../lib/claude-cost-common.sh"
+_COMMON="$SCRIPT_DIR/../lib/claude-cost/claude-cost-common.sh"
+[ -f "$_COMMON" ] || _COMMON="$SCRIPT_DIR/../lib/claude-cost-common.sh"
+# shellcheck source=/dev/null
+. "$_COMMON"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"
