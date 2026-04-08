@@ -160,7 +160,7 @@ SELECT
     printf('%,d', cache_read_tokens) AS cache_read,
     printf('\$%.4f', cost_usd) AS cost
 FROM daily_usage
-WHERE date >= date('now', '-${last} days')
+WHERE date >= date('now', '-$((last - 1)) days')
 ORDER BY date DESC, cost_usd DESC;
 "
 }
@@ -180,7 +180,7 @@ SELECT
     printf('\$%.4f', SUM(cost_usd)) AS total_cost,
     COUNT(DISTINCT model) AS models
 FROM daily_usage
-WHERE date >= date('now', '-${last} days')
+WHERE date >= date('now', '-$((last - 1)) days')
 GROUP BY date
 ORDER BY date DESC;
 "
@@ -211,7 +211,7 @@ ORDER BY month DESC;
 cmd_weekly() {
     local last
     last=$(parse_last 8 "$@")
-    local days=$((last * 7))
+    local days=$((last * 7 - 1))
 
     section "Weekly Usage (last ${last} weeks)"
     query_table "
