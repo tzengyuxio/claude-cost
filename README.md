@@ -1,15 +1,16 @@
 # claude-cost
 
-Persistent local tracking of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) token usage and costs.
+Persistent local tracking of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) token usage and costs.
 
-Collects daily usage data from [ccusage](https://github.com/ryoppippi/ccusage) into a local SQLite database, so your cost history survives session JSONL rotation and cleanup.
+Collects daily usage data from [ccusage](https://github.com/ryoppippi/ccusage) and [@ccusage/codex](https://www.npmjs.com/package/@ccusage/codex) into a local SQLite database, so your cost history survives session JSONL rotation and cleanup.
 
 ## Features
 
+- **Multi-provider** — tracks Claude Code and Codex CLI usage in one database
 - **Incremental collection** — only fetches new data since the last run
 - **Automatic backfill** — if your laptop was off for days, it catches up on wake
 - **Idempotent** — safe to run multiple times; same data won't duplicate
-- **Formatted reports** — daily, monthly, summary views with right-aligned numbers
+- **Formatted reports** — daily, monthly, summary views with right-aligned numbers, broken down by provider
 - **CSV export** — for spreadsheets or further analysis
 - **Zero daemon** — scheduled via launchd (macOS) or systemd timer (Linux)
 
@@ -69,10 +70,19 @@ claude-cost-collect
 Edit `~/.config/claude-cost/config`:
 
 ```sh
-TIMEZONE="Asia/Taipei"      # Timezone for date grouping (default: UTC)
-CCUSAGE_VERSION="18.0.10"   # Pinned ccusage version
-SCHEDULE_HOUR=2             # Collection time — hour (default: 2)
-SCHEDULE_MINUTE=0           # Collection time — minute (default: 0)
+TIMEZONE="Asia/Taipei"           # Timezone for date grouping (default: UTC)
+CCUSAGE_VERSION="18.0.10"        # Pinned ccusage (Claude) version
+CCUSAGE_CODEX_VERSION="18.0.10"  # Pinned @ccusage/codex version
+ENABLED_PROVIDERS="claude codex" # Space-separated list of active providers
+CODEX_OFFLINE=1                  # Pass --offline to codex fetcher (default: 1)
+SCHEDULE_HOUR=2                  # Collection time — hour (default: 2)
+SCHEDULE_MINUTE=0                # Collection time — minute (default: 0)
+```
+
+To collect only Claude Code usage (no Codex), set:
+
+```sh
+ENABLED_PROVIDERS="claude"
 ```
 
 After changing schedule settings, reload:
@@ -123,10 +133,13 @@ month    input_tok  output_tok  cache_create  cache_read     total_cost  avg_dai
 ```
 launchd / systemd timer (daily, e.g. 02:00)
   → claude-cost-collect
-    → npx ccusage daily --json --timezone $TIMEZONE
-    → filters dates between watermark and yesterday
-    → INSERT OR REPLACE into SQLite (single transaction)
-    → updates watermark
+    → for each provider in ENABLED_PROVIDERS:
+        claude: npx ccusage@VERSION daily --json --timezone $TIMEZONE
+        codex:  npx -y @ccusage/codex@VERSION daily --json [--offline]
+    → filters dates between per-provider watermark and yesterday
+    → normalises to common TSV format (date, provider, model, tokens…, cost)
+    → INSERT OR REPLACE into SQLite (single transaction per provider)
+    → updates per-provider watermark
 ```
 
 Data is stored at `~/.local/share/claude-cost/usage.db`. You can query it directly:
