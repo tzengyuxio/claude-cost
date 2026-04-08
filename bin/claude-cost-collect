@@ -94,6 +94,11 @@ init_db
 YESTERDAY=$(yesterday)
 
 # --- Provider loop ---
+if [[ -z "$ENABLED_PROVIDERS" ]]; then
+    log "WARNING: ENABLED_PROVIDERS is empty, nothing to collect."
+    exit 0
+fi
+
 for PROVIDER in $ENABLED_PROVIDERS; do
     WATERMARK_KEY="last_collected_date:${PROVIDER}"
     LAST_COLLECTED=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='${WATERMARK_KEY}';" 2>/dev/null || echo "")
@@ -104,6 +109,12 @@ for PROVIDER in $ENABLED_PROVIDERS; do
     fi
 
     log "INFO: [${PROVIDER}] Starting collection. last_collected=${LAST_COLLECTED:-<none>}, yesterday=$YESTERDAY"
+
+    # Validate fetcher function exists before calling
+    if ! declare -f "fetch_${PROVIDER}" > /dev/null 2>&1; then
+        log "ERROR: [${PROVIDER}] No fetcher function 'fetch_${PROVIDER}' found."
+        continue
+    fi
 
     # Call the appropriate fetcher function
     ROWS=$(fetch_${PROVIDER} "$LAST_COLLECTED" "$YESTERDAY" 2>> "$LOG") || {
@@ -118,14 +129,30 @@ for PROVIDER in $ENABLED_PROVIDERS; do
 
     ROWS_BEFORE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='${PROVIDER}';")
 
-    {
+    if ! {
         echo "BEGIN;"
         while IFS=$'\t' read -r dt prov model input output cache_create cache_read cost; do
+            # Validate date format
+            if [[ ! "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+                log "WARNING: [${PROVIDER}] Skipping row with invalid date: '$dt'"
+                continue
+            fi
+            # Escape string fields
             model_escaped="${model//\'/\'\'}"
-            echo "INSERT OR REPLACE INTO daily_usage (date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) VALUES ('$dt', '$prov', '$model_escaped', $input, $output, $cache_create, $cache_read, $cost);"
+            prov_escaped="${prov//\'/\'\'}"
+            # Sanitize numeric fields: replace non-numeric values with 0
+            [[ "$input"        =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { log "WARNING: [${PROVIDER}] Non-numeric input_tokens '$input', using 0"; input=0; }
+            [[ "$output"       =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { log "WARNING: [${PROVIDER}] Non-numeric output_tokens '$output', using 0"; output=0; }
+            [[ "$cache_create" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { log "WARNING: [${PROVIDER}] Non-numeric cache_creation_tokens '$cache_create', using 0"; cache_create=0; }
+            [[ "$cache_read"   =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { log "WARNING: [${PROVIDER}] Non-numeric cache_read_tokens '$cache_read', using 0"; cache_read=0; }
+            [[ "$cost"         =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { log "WARNING: [${PROVIDER}] Non-numeric cost_usd '$cost', using 0"; cost=0; }
+            echo "INSERT OR REPLACE INTO daily_usage (date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) VALUES ('$dt', '$prov_escaped', '$model_escaped', $input, $output, $cache_create, $cache_read, $cost);"
         done <<< "$ROWS"
         echo "COMMIT;"
-    } | sqlite3 "$DB"
+    } | sqlite3 "$DB"; then
+        log "ERROR: [${PROVIDER}] DB transaction failed."
+        continue
+    fi
 
     ROWS_AFTER=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='${PROVIDER}';")
     INSERTED=$((ROWS_AFTER - ROWS_BEFORE))

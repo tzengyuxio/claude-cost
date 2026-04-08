@@ -8,16 +8,16 @@ fetch_claude() {
     local yesterday="$2"
     local tmpfile
     tmpfile=$(mktemp)
-    # shellcheck disable=SC2064
-    trap "rm -f '$tmpfile'" RETURN
 
     if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$tmpfile" 2>/dev/null; then
         echo "ERROR: ccusage (claude) failed" >&2
+        rm -f "$tmpfile"
         return 1
     fi
 
     if ! jq empty "$tmpfile" 2>/dev/null; then
         echo "ERROR: ccusage (claude) output is not valid JSON" >&2
+        rm -f "$tmpfile"
         return 1
     fi
 
@@ -35,4 +35,5 @@ fetch_claude() {
            (.cost // 0)]
         | @tsv
     ' "$tmpfile"
+    rm -f "$tmpfile"
 }

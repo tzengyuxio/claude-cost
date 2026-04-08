@@ -8,8 +8,6 @@ fetch_codex() {
     local yesterday="$2"
     local tmpfile
     tmpfile=$(mktemp)
-    # shellcheck disable=SC2064
-    trap "rm -f '$tmpfile'" RETURN
 
     local offline_flag=""
     if [[ "${CODEX_OFFLINE:-1}" == "1" ]]; then
@@ -19,11 +17,13 @@ fetch_codex() {
     # shellcheck disable=SC2086
     if ! npx -y "@ccusage/codex@${CCUSAGE_CODEX_VERSION}" daily --json --timezone "$TIMEZONE" $offline_flag > "$tmpfile" 2>/dev/null; then
         echo "ERROR: @ccusage/codex failed" >&2
+        rm -f "$tmpfile"
         return 1
     fi
 
     if ! jq empty "$tmpfile" 2>/dev/null; then
         echo "ERROR: @ccusage/codex output is not valid JSON" >&2
+        rm -f "$tmpfile"
         return 1
     fi
 
@@ -47,4 +47,5 @@ fetch_codex() {
            (if $day_total > 0 then $m.totalTokens * $day_cost / $day_total else 0 end)]
         | @tsv
     ' "$tmpfile"
+    rm -f "$tmpfile"
 }
