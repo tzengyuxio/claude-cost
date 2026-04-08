@@ -4,6 +4,12 @@ Persistent local tracking of [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Collects daily usage data from [ccusage](https://github.com/ryoppippi/ccusage) and [@ccusage/codex](https://www.npmjs.com/package/@ccusage/codex) into a local SQLite database, so your cost history survives session JSONL rotation and cleanup.
 
+## Why
+
+`ccusage` reads usage directly from Claude Code's session JSONL files. These files get rotated and cleaned up over time — so the further back you look, the more data has already been discarded. Historical usage figures become increasingly understated the longer you wait to check them.
+
+`claude-cost` solves this by collecting each day's totals into a persistent SQLite database before the JSONL files disappear. Once captured, the numbers never change — your cost history stays accurate regardless of how long ago an event occurred.
+
 ## Features
 
 - **Multi-provider** — tracks Claude Code and Codex CLI usage in one database
@@ -116,6 +122,18 @@ claude-cost-report summary
 claude-cost-report csv --output costs.csv
 ```
 
+### Shell aliases
+
+Add to your `~/.zshrc` for quick access to the most common reports:
+
+```zsh
+if command -v claude-cost-report &> /dev/null; then
+    alias ccr-monthly='claude-cost-report monthly'
+    alias ccr-weekly='claude-cost-report weekly'
+    alias ccr-daily='claude-cost-report daily-total'
+fi
+```
+
 ### Example output
 
 ```
@@ -170,6 +188,70 @@ If you previously had scripts in `~/.claude/usage-tracking/`:
 2. Run `make install`
 3. Unload the old schedule: `launchctl unload ~/Library/LaunchAgents/com.user.cc-usage-collect.plist`
 4. Remove old plist: `rm ~/Library/LaunchAgents/com.user.cc-usage-collect.plist`
+
+## Troubleshooting
+
+### Report shows no recent data
+
+Check the collect log first:
+
+```bash
+tail -20 ~/.local/share/claude-cost/logs/collect.log
+```
+
+Common errors and fixes:
+
+#### `npx: command not found`
+
+launchd (and systemd) run with a minimal `PATH` that typically excludes Homebrew and Node.js. The scheduled job can't find `npx` even though it works in your terminal.
+
+**Fix:** add an `EnvironmentVariables` block to the launchd plist so it includes the full path to `npx`:
+
+```bash
+# Edit the plist
+nano ~/Library/LaunchAgents/com.claude-cost.collect.plist
+```
+
+Add inside the root `<dict>`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+</dict>
+```
+
+Then reload and trigger a manual collection:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.claude-cost.collect.plist
+launchctl load  ~/Library/LaunchAgents/com.claude-cost.collect.plist
+launchctl start com.claude-cost.collect
+
+# Confirm it worked
+tail -5 ~/.local/share/claude-cost/logs/collect.log
+```
+
+You should see a line like `INFO: Upserted data (N new rows ...). Watermark updated to YYYY-MM-DD.`
+
+> **Note:** today's data is always collected *tomorrow* — the watermark stops at "yesterday" to avoid partial-day counts. So after a successful run, the latest date in the report will be yesterday.
+
+#### `Another instance is running (lock exists)`
+
+A previous run crashed without releasing the lock directory. Remove it manually:
+
+```bash
+rmdir ~/.local/share/claude-cost/.lock
+```
+
+#### Watermark is stuck far in the past
+
+If `last_collected_date` is very old and the scheduled job kept failing silently, run a manual collection once the underlying issue is fixed — it will automatically backfill all missed days in a single run.
+
+```bash
+claude-cost-collect
+```
 
 ## License
 
