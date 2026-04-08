@@ -115,40 +115,84 @@ usage() {
 Usage: claude-cost-report <command> [options]
 
 Commands:
-  daily       [--last N]      Last N days per-model breakdown (default: 30)
-  daily-total [--last N]      Last N days aggregated totals (default: 30)
-  weekly      [--last N]      Last N ISO weeks summary (default: 8)
-  monthly     [--last N]      Last N months summary (default: 6)
+  daily       [report-opts]   Last N days per-model breakdown (default: 30)
+  daily-total [report-opts]   Last N days aggregated totals (default: 30)
+  weekly      [report-opts]   Last N ISO weeks summary (default: 8)
+  monthly     [report-opts]   Last N months summary (default: 6)
   summary                     Overall usage summary
   csv         [--output FILE] Export all data as CSV
 
-Options:
-  --last N     Number of days/months to show
-  --output F   CSV output file (default: stdout)
-  --version    Show version
+Report options (daily / daily-total / weekly / monthly):
+  --last N       Number of days/weeks/months to show
+  --by-provider  Split rows by provider (default: aggregated across providers)
+  --provider P   Filter to a single provider (e.g. claude, codex)
+
+Other:
+  --output F     CSV output file (default: stdout)
+  --version      Show version
 EOF
     exit 1
 }
 
-parse_last() {
-    local default="$1"; shift
-    local last="$default"
+# Parse --last, --provider, and --by-provider.
+# Writes globals: LAST_VAL, PROVIDER_VAL, BY_PROVIDER (0 or 1).
+parse_report_opts() {
+    LAST_VAL="$1"; shift
+    PROVIDER_VAL=""
+    BY_PROVIDER=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --last) last="$2"; shift 2 ;;
+            --last)        LAST_VAL="$2"; shift 2 ;;
+            --provider)    PROVIDER_VAL="$2"; shift 2 ;;
+            --by-provider) BY_PROVIDER=1; shift ;;
             *) echo "Unknown option: $1" >&2; exit 1 ;;
         esac
     done
-    echo "$last"
+}
+
+# Build a "AND provider = '...'" clause, escaping single quotes.
+provider_clause() {
+    if [ -n "$PROVIDER_VAL" ]; then
+        local escaped="${PROVIDER_VAL//\'/\'\'}"
+        echo "AND provider = '$escaped'"
+    fi
+}
+
+# Section suffix describing the active provider scope.
+provider_suffix() {
+    if [ -n "$PROVIDER_VAL" ]; then
+        echo ", provider=${PROVIDER_VAL}"
+    elif [ "$BY_PROVIDER" = "1" ]; then
+        echo ", by provider"
+    fi
+}
+
+# Decide whether aggregate queries should include a provider column.
+# Writes globals: PROV_COL (SELECT fragment) and PROV_GROUP (GROUP/ORDER BY fragment).
+# No-op when a single provider is filtered — the column would be redundant.
+provider_group_fragments() {
+    if [ "$BY_PROVIDER" = "1" ] && [ -z "$PROVIDER_VAL" ]; then
+        PROV_COL="provider,"
+        PROV_GROUP=", provider"
+    else
+        PROV_COL=""
+        PROV_GROUP=""
+    fi
 }
 
 # --- Subcommands ---
 
 cmd_daily() {
-    local last
-    last=$(parse_last 30 "$@")
+    parse_report_opts 30 "$@"
+    local prov_clause title_suffix
+    prov_clause=$(provider_clause)
+    if [ -n "$PROVIDER_VAL" ]; then
+        title_suffix=" — ${PROVIDER_VAL} only"
+    else
+        title_suffix=""
+    fi
 
-    section "Daily Usage (last ${last} days, per provider/model)"
+    section "Daily Usage (last ${LAST_VAL} days, per provider/model${title_suffix})"
     query_table "
 SELECT
     date,
@@ -158,42 +202,50 @@ SELECT
     printf('%,d', output_tokens) AS output_tok,
     printf('%,d', cache_creation_tokens) AS cache_create,
     printf('%,d', cache_read_tokens) AS cache_read,
-    printf('\$%.4f', cost_usd) AS cost
+    printf('\$%.2f', cost_usd) AS cost
 FROM daily_usage
-WHERE date >= date('now', '-$((last - 1)) days')
-ORDER BY date DESC, cost_usd DESC;
+WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
+${prov_clause}
+ORDER BY date DESC, provider, cost_usd DESC;
 "
 }
 
 cmd_daily_total() {
-    local last
-    last=$(parse_last 30 "$@")
+    parse_report_opts 30 "$@"
+    local prov_clause
+    prov_clause=$(provider_clause)
+    provider_group_fragments
 
-    section "Daily Usage (last ${last} days, aggregated)"
+    section "Daily Usage (last ${LAST_VAL} days, aggregated$(provider_suffix))"
     query_table "
 SELECT
     date,
+    ${PROV_COL}
     printf('%,d', SUM(input_tokens)) AS input_tok,
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
-    printf('\$%.4f', SUM(cost_usd)) AS total_cost,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
     COUNT(DISTINCT model) AS models
 FROM daily_usage
-WHERE date >= date('now', '-$((last - 1)) days')
-GROUP BY date
-ORDER BY date DESC;
+WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
+${prov_clause}
+GROUP BY date${PROV_GROUP}
+ORDER BY date DESC${PROV_GROUP};
 "
 }
 
 cmd_monthly() {
-    local last
-    last=$(parse_last 6 "$@")
+    parse_report_opts 6 "$@"
+    local prov_clause
+    prov_clause=$(provider_clause)
+    provider_group_fragments
 
-    section "Monthly Usage (last ${last} months)"
+    section "Monthly Usage (last ${LAST_VAL} months$(provider_suffix))"
     query_table "
 SELECT
     strftime('%Y-%m', date) AS month,
+    ${PROV_COL}
     printf('%,d', SUM(input_tokens)) AS input_tok,
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
@@ -202,27 +254,32 @@ SELECT
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM daily_usage
-WHERE strftime('%Y-%m', date) >= strftime('%Y-%m', date('now', '-${last} months'))
-GROUP BY month
-ORDER BY month DESC;
+WHERE strftime('%Y-%m', date) >= strftime('%Y-%m', date('now', '-${LAST_VAL} months'))
+${prov_clause}
+GROUP BY month${PROV_GROUP}
+ORDER BY month DESC${PROV_GROUP};
 "
 }
 
 cmd_weekly() {
-    local last
-    last=$(parse_last 8 "$@")
-    local days=$((last * 7 - 1))
+    parse_report_opts 8 "$@"
+    local days=$((LAST_VAL * 7 - 1))
+    local prov_clause
+    prov_clause=$(provider_clause)
+    provider_group_fragments
 
-    section "Weekly Usage (last ${last} weeks)"
+    section "Weekly Usage (last ${LAST_VAL} weeks$(provider_suffix))"
     query_table "
 WITH base AS (
     SELECT *,
         date(date, CAST((3 - (CAST(strftime('%w', date) AS INTEGER) + 6) % 7) AS TEXT) || ' days') AS thursday
     FROM daily_usage
     WHERE date >= date('now', '-${days} days')
+    ${prov_clause}
 )
 SELECT
     strftime('%Y-W', thursday) || printf('%02d', (CAST(strftime('%j', thursday) AS INTEGER) + 6) / 7) AS week,
+    ${PROV_COL}
     printf('%,d', SUM(input_tokens)) AS input_tok,
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
@@ -231,8 +288,8 @@ SELECT
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM base
-GROUP BY week
-ORDER BY week DESC;
+GROUP BY week${PROV_GROUP}
+ORDER BY week DESC${PROV_GROUP};
 "
 }
 
