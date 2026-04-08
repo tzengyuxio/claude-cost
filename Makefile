@@ -24,10 +24,12 @@ help: ## Show this help
 
 install: ## Install claude-cost scripts and schedule
 	@echo "Installing claude-cost..."
-	@mkdir -p $(BINDIR) $(LIBDIR) $(DATADIR)/logs
+	@mkdir -p $(BINDIR) $(LIBDIR) $(LIBDIR)/fetchers $(DATADIR)/logs
 	install -m 755 bin/claude-cost-collect $(BINDIR)/
 	install -m 755 bin/claude-cost-report  $(BINDIR)/
 	install -m 644 lib/claude-cost-common.sh $(LIBDIR)/
+	install -m 644 lib/fetchers/claude.sh $(LIBDIR)/fetchers/
+	install -m 644 lib/fetchers/codex.sh $(LIBDIR)/fetchers/
 	@# Config (never overwrite existing)
 	@mkdir -p $(CONFDIR)
 	@if [ ! -f "$(CONFDIR)/config" ]; then \
