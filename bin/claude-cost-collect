@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-cost-collect — Collect Claude Code usage from ccusage into SQLite
+# claude-cost-collect — Collect usage from enabled providers into SQLite
 # Designed to be run daily by launchd/systemd; handles backfill for missed days.
 
 set -euo pipefail
@@ -10,6 +10,14 @@ _COMMON="$SCRIPT_DIR/../lib/claude-cost/claude-cost-common.sh"
 [ -f "$_COMMON" ] || _COMMON="$SCRIPT_DIR/../lib/claude-cost-common.sh"
 # shellcheck source=/dev/null
 . "$_COMMON"
+
+# Source provider fetchers
+_FETCHERS_DIR="$SCRIPT_DIR/../lib/claude-cost/fetchers"
+[ -d "$_FETCHERS_DIR" ] || _FETCHERS_DIR="$SCRIPT_DIR/../lib/fetchers"
+# shellcheck source=/dev/null
+. "$_FETCHERS_DIR/claude.sh"
+# shellcheck source=/dev/null
+. "$_FETCHERS_DIR/codex.sh"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"
@@ -25,18 +33,19 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap cleanup_lock EXIT
 
-# --- Ensure DB and schema exist ---
+# --- Ensure DB and schema exist (with migration) ---
 init_db() {
     sqlite3 "$DB" <<'SQL'
 CREATE TABLE IF NOT EXISTS daily_usage (
     date       TEXT NOT NULL,
+    provider   TEXT NOT NULL DEFAULT 'claude',
     model      TEXT NOT NULL,
-    input_tokens      INTEGER DEFAULT 0,
-    output_tokens     INTEGER DEFAULT 0,
+    input_tokens          INTEGER DEFAULT 0,
+    output_tokens         INTEGER DEFAULT 0,
     cache_creation_tokens INTEGER DEFAULT 0,
-    cache_read_tokens    INTEGER DEFAULT 0,
-    cost_usd   REAL DEFAULT 0.0,
-    PRIMARY KEY (date, model)
+    cache_read_tokens     INTEGER DEFAULT 0,
+    cost_usd              REAL DEFAULT 0.0,
+    PRIMARY KEY (date, provider, model)
 );
 
 CREATE TABLE IF NOT EXISTS collect_metadata (
@@ -44,77 +53,88 @@ CREATE TABLE IF NOT EXISTS collect_metadata (
     value TEXT
 );
 SQL
+
+    # Migrate: add provider column if missing (old schema had PK (date, model))
+    local has_provider
+    has_provider=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('daily_usage') WHERE name='provider';")
+    if [ "$has_provider" -eq 0 ]; then
+        log "INFO: Migrating schema: adding provider column to daily_usage"
+        sqlite3 "$DB" <<'SQL'
+BEGIN;
+CREATE TABLE daily_usage_new (
+    date       TEXT NOT NULL,
+    provider   TEXT NOT NULL DEFAULT 'claude',
+    model      TEXT NOT NULL,
+    input_tokens          INTEGER DEFAULT 0,
+    output_tokens         INTEGER DEFAULT 0,
+    cache_creation_tokens INTEGER DEFAULT 0,
+    cache_read_tokens     INTEGER DEFAULT 0,
+    cost_usd              REAL DEFAULT 0.0,
+    PRIMARY KEY (date, provider, model)
+);
+INSERT INTO daily_usage_new
+    SELECT date, 'claude', model,
+           input_tokens, output_tokens,
+           cache_creation_tokens, cache_read_tokens,
+           cost_usd
+    FROM daily_usage;
+DROP TABLE daily_usage;
+ALTER TABLE daily_usage_new RENAME TO daily_usage;
+COMMIT;
+SQL
+        # Migrate watermark key
+        sqlite3 "$DB" "UPDATE collect_metadata SET key='last_collected_date:claude' WHERE key='last_collected_date';"
+        log "INFO: Schema migration complete."
+    fi
 }
 
 mkdir -p "$(dirname "$LOG")"
 init_db
 
-# --- Determine date range ---
-LAST_COLLECTED=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date';" 2>/dev/null || echo "")
 YESTERDAY=$(yesterday)
 
-if [[ -n "$LAST_COLLECTED" && ! "$LAST_COLLECTED" < "$YESTERDAY" ]]; then
-    log "INFO: Already up to date (last_collected=$LAST_COLLECTED, yesterday=$YESTERDAY). Nothing to do."
-    exit 0
-fi
+# --- Provider loop ---
+for PROVIDER in $ENABLED_PROVIDERS; do
+    WATERMARK_KEY="last_collected_date:${PROVIDER}"
+    LAST_COLLECTED=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='${WATERMARK_KEY}';" 2>/dev/null || echo "")
 
-log "INFO: Starting collection. last_collected=${LAST_COLLECTED:-<none>}, yesterday=$YESTERDAY"
+    if [[ -n "$LAST_COLLECTED" && ! "$LAST_COLLECTED" < "$YESTERDAY" ]]; then
+        log "INFO: [${PROVIDER}] Already up to date (last_collected=$LAST_COLLECTED, yesterday=$YESTERDAY). Skipping."
+        continue
+    fi
 
-# --- Run ccusage ---
-TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"; cleanup_lock' EXIT
+    log "INFO: [${PROVIDER}] Starting collection. last_collected=${LAST_COLLECTED:-<none>}, yesterday=$YESTERDAY"
 
-if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$TMPFILE" 2>> "$LOG"; then
-    log "ERROR: ccusage failed. Not updating watermark."
-    exit 1
-fi
+    # Call the appropriate fetcher function
+    ROWS=$("fetch_${PROVIDER}" "$LAST_COLLECTED" "$YESTERDAY" 2>> "$LOG") || {
+        log "ERROR: [${PROVIDER}] Fetcher failed. Skipping provider."
+        continue
+    }
 
-# Validate JSON
-if ! jq empty "$TMPFILE" 2>/dev/null; then
-    log "ERROR: ccusage output is not valid JSON. Not updating watermark."
-    exit 1
-fi
+    if [ -z "$ROWS" ]; then
+        log "INFO: [${PROVIDER}] No new data to insert."
+        continue
+    fi
 
-# --- Parse and insert (single transaction) ---
-ROWS=$(jq -r --arg yesterday "$YESTERDAY" --arg last "${LAST_COLLECTED:-}" '
-    .daily[]
-    | select(.date <= $yesterday)
-    | select($last == "" or .date > $last)
-    | .date as $d
-    | .modelBreakdowns[]
-    | [$d, .modelName,
-       (.inputTokens // 0),
-       (.outputTokens // 0),
-       (.cacheCreationTokens // 0),
-       (.cacheReadTokens // 0),
-       (.cost // 0)]
-    | @tsv
-' "$TMPFILE")
+    ROWS_BEFORE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='${PROVIDER}';")
 
-if [ -z "$ROWS" ]; then
-    log "INFO: No new data to insert."
-    exit 0
-fi
+    {
+        echo "BEGIN;"
+        while IFS=$'\t' read -r dt prov model input output cache_create cache_read cost; do
+            model_escaped="${model//\'/\'\'}"
+            echo "INSERT OR REPLACE INTO daily_usage (date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) VALUES ('$dt', '$prov', '$model_escaped', $input, $output, $cache_create, $cache_read, $cost);"
+        done <<< "$ROWS"
+        echo "COMMIT;"
+    } | sqlite3 "$DB"
 
-ROWS_BEFORE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
+    ROWS_AFTER=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='${PROVIDER}';")
+    INSERTED=$((ROWS_AFTER - ROWS_BEFORE))
+    MAX_DATE=$(sqlite3 "$DB" "SELECT MAX(date) FROM daily_usage WHERE provider='${PROVIDER}' AND date <= '$YESTERDAY';")
 
-{
-    echo "BEGIN;"
-    while IFS=$'\t' read -r dt model input output cache_create cache_read cost; do
-        model_escaped="${model//\'/\'\'}"
-        echo "INSERT OR REPLACE INTO daily_usage (date, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) VALUES ('$dt', '$model_escaped', $input, $output, $cache_create, $cache_read, $cost);"
-    done <<< "$ROWS"
-    echo "COMMIT;"
-} | sqlite3 "$DB"
-
-# --- Update watermark from DB ---
-ROWS_AFTER=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
-INSERTED=$((ROWS_AFTER - ROWS_BEFORE))
-MAX_DATE=$(sqlite3 "$DB" "SELECT MAX(date) FROM daily_usage WHERE date <= '$YESTERDAY';")
-
-if [ -n "$MAX_DATE" ]; then
-    sqlite3 "$DB" "INSERT OR REPLACE INTO collect_metadata (key, value) VALUES ('last_collected_date', '$MAX_DATE');"
-    log "INFO: Upserted data ($INSERTED new rows, total $ROWS_AFTER). Watermark updated to $MAX_DATE."
-else
-    log "INFO: No rows inserted."
-fi
+    if [ -n "$MAX_DATE" ]; then
+        sqlite3 "$DB" "INSERT OR REPLACE INTO collect_metadata (key, value) VALUES ('${WATERMARK_KEY}', '$MAX_DATE');"
+        log "INFO: [${PROVIDER}] Upserted data ($INSERTED new rows, total $ROWS_AFTER). Watermark updated to $MAX_DATE."
+    else
+        log "INFO: [${PROVIDER}] No rows inserted."
+    fi
+done
