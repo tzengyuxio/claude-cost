@@ -11,7 +11,7 @@ fetch_claude() {
     # shellcheck disable=SC2064
     trap "rm -f '$tmpfile'" RETURN
 
-    if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$tmpfile" 2>&2; then
+    if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$tmpfile" 2>/dev/null; then
         echo "ERROR: ccusage (claude) failed" >&2
         return 1
     fi

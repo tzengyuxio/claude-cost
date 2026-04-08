@@ -17,7 +17,7 @@ fetch_codex() {
     fi
 
     # shellcheck disable=SC2086
-    if ! npx -y "@ccusage/codex@${CCUSAGE_CODEX_VERSION}" daily --json --timezone "$TIMEZONE" $offline_flag > "$tmpfile" 2>&2; then
+    if ! npx -y "@ccusage/codex@${CCUSAGE_CODEX_VERSION}" daily --json --timezone "$TIMEZONE" $offline_flag > "$tmpfile" 2>/dev/null; then
         echo "ERROR: @ccusage/codex failed" >&2
         return 1
     fi

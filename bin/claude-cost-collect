@@ -106,7 +106,7 @@ for PROVIDER in $ENABLED_PROVIDERS; do
     log "INFO: [${PROVIDER}] Starting collection. last_collected=${LAST_COLLECTED:-<none>}, yesterday=$YESTERDAY"
 
     # Call the appropriate fetcher function
-    ROWS=$("fetch_${PROVIDER}" "$LAST_COLLECTED" "$YESTERDAY" 2>> "$LOG") || {
+    ROWS=$(fetch_${PROVIDER} "$LAST_COLLECTED" "$YESTERDAY" 2>> "$LOG") || {
         log "ERROR: [${PROVIDER}] Fetcher failed. Skipping provider."
         continue
     }
