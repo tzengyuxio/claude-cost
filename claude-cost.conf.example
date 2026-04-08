@@ -10,6 +10,18 @@ TIMEZONE="UTC"
 # Default: 18.0.10
 CCUSAGE_VERSION="18.0.10"
 
+# Enabled providers (space-separated). Currently supported: claude, codex
+# Default: claude
+ENABLED_PROVIDERS="claude"
+
+# Pinned @ccusage/codex version (npm package)
+# Default: 18.0.10
+CCUSAGE_CODEX_VERSION="18.0.10"
+
+# Use cached pricing data for Codex (1=offline, 0=fetch from LiteLLM)
+# Default: 1
+CODEX_OFFLINE=1
+
 # Scheduled collection time (used by launchd/systemd)
 # Default: 02:00
 SCHEDULE_HOUR=2

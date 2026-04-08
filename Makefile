@@ -102,7 +102,7 @@ else
 endif
 
 lint: ## Run shellcheck on all scripts
-	shellcheck --severity=warning bin/claude-cost-collect bin/claude-cost-report lib/claude-cost-common.sh
+	shellcheck --severity=warning bin/claude-cost-collect bin/claude-cost-report lib/claude-cost-common.sh lib/fetchers/claude.sh lib/fetchers/codex.sh
 
 test: ## Run smoke tests
 	bash tests/smoke.sh
