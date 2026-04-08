@@ -148,10 +148,11 @@ cmd_daily() {
     local last
     last=$(parse_last 30 "$@")
 
-    section "Daily Usage (last ${last} days, per model)"
+    section "Daily Usage (last ${last} days, per provider/model)"
     query_table "
 SELECT
     date,
+    provider,
     model,
     printf('%,d', input_tokens) AS input_tok,
     printf('%,d', output_tokens) AS output_tok,
@@ -270,6 +271,18 @@ FROM daily_usage
 GROUP BY model
 ORDER BY SUM(cost_usd) DESC;
 "
+
+    section "Cost by Provider"
+    query_table "
+SELECT
+    provider,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('%.1f%%', SUM(cost_usd) * 100.0 / (SELECT SUM(cost_usd) FROM daily_usage)) AS pct,
+    COUNT(DISTINCT date) AS days_used
+FROM daily_usage
+GROUP BY provider
+ORDER BY SUM(cost_usd) DESC;
+"
 }
 
 cmd_csv() {
@@ -281,7 +294,7 @@ cmd_csv() {
         esac
     done
 
-    local query="SELECT date, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM daily_usage ORDER BY date, model;"
+    local query="SELECT date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM daily_usage ORDER BY date, provider, model;"
 
     if [ -n "$output" ]; then
         sqlite3 -header -csv "$DB" "$query" > "$output"
