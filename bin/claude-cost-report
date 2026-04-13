@@ -142,8 +142,12 @@ parse_report_opts() {
     BY_PROVIDER=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --last)        LAST_VAL="$2"; shift 2 ;;
-            --provider)    PROVIDER_VAL="$2"; shift 2 ;;
+            --last)
+                if [[ $# -lt 2 ]]; then echo "Error: --last requires a value" >&2; exit 1; fi
+                LAST_VAL="$2"; shift 2 ;;
+            --provider)
+                if [[ $# -lt 2 ]]; then echo "Error: --provider requires a value" >&2; exit 1; fi
+                PROVIDER_VAL="$2"; shift 2 ;;
             --by-provider) BY_PROVIDER=1; shift ;;
             *) echo "Unknown option: $1" >&2; exit 1 ;;
         esac
