@@ -6,17 +6,21 @@
 fetch_claude() {
     local last="$1"
     local yesterday="$2"
-    local tmpfile
+    local tmpfile errfile
     tmpfile=$(mktemp)
+    errfile=$(mktemp)
 
-    if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$tmpfile" 2>/dev/null; then
+    if ! npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE" > "$tmpfile" 2> "$errfile"; then
         echo "ERROR: ccusage (claude) failed" >&2
-        rm -f "$tmpfile"
+        [[ -s "$errfile" ]] && sed 's/^/  | /' "$errfile" >&2
+        rm -f "$tmpfile" "$errfile"
         return 1
     fi
+    rm -f "$errfile"
 
     if ! jq empty "$tmpfile" 2>/dev/null; then
         echo "ERROR: ccusage (claude) output is not valid JSON" >&2
+        head -c 200 "$tmpfile" | sed 's/^/  | /' >&2
         rm -f "$tmpfile"
         return 1
     fi
