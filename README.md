@@ -115,12 +115,20 @@ claude-cost-report weekly --last 4
 # Monthly summary
 claude-cost-report monthly
 
+# Hour-of-day breakdown (last 14 days by default) — when are you most active?
+claude-cost-report by-hour
+
+# 7×24 weekday/hour heatmap (last 28 days by default)
+claude-cost-report by-weekday-hour
+
 # Overall summary with top models
 claude-cost-report summary
 
 # Export to CSV
 claude-cost-report csv --output costs.csv
 ```
+
+> **Note:** `by-hour` and `by-weekday-hour` read from the separate `hourly_usage` table, populated only for the `claude` provider (ccusage's `blocks` subcommand). Codex CLI exposes no hourly granularity, so it is not represented in these reports.
 
 ### Shell aliases
 

@@ -19,11 +19,11 @@ Scripts are plain bash. No build step. `bin/` scripts source `lib/claude-cost-co
 
 Two entry points, one shared library, and a fetcher layer:
 
-- `bin/claude-cost-collect` — Runs enabled provider fetchers, filters by per-provider date watermark, inserts into SQLite in a single transaction per provider. Uses directory-based locking (`$TRACKING_DIR/.lock` via `mkdir`). Designed for launchd/systemd cron; handles backfill for missed days automatically.
-- `bin/claude-cost-report` — Read-only queries against the DB. Subcommands: `daily`, `daily-total`, `weekly`, `monthly`, `summary`, `csv`. All formatted output goes through `render_table` (awk function that auto-detects numeric columns for right-alignment). The `summary` command includes a "Cost by Provider" breakdown. `daily-total` / `weekly` / `monthly` accept `--by-provider` to split rows per provider, and `--provider P` to filter to a single provider; `daily` is always per-model so only `--provider` applies.
+- `bin/claude-cost-collect` — Runs enabled provider fetchers, filters by per-provider date watermark, inserts into SQLite in a single transaction per provider. Uses directory-based locking (`$TRACKING_DIR/.lock` via `mkdir`). Designed for launchd/systemd cron; handles backfill for missed days automatically. After the daily fetch, if a `fetch_${PROVIDER}_hourly` function exists, also runs hourly collection into `hourly_usage`.
+- `bin/claude-cost-report` — Read-only queries against the DB. Subcommands: `daily`, `daily-total`, `weekly`, `monthly`, `by-hour`, `by-weekday-hour`, `summary`, `csv`. All formatted output goes through `render_table` (awk function that auto-detects numeric columns for right-alignment). The `summary` command includes a "Cost by Provider" breakdown. `daily-total` / `weekly` / `monthly` accept `--by-provider` to split rows per provider, and `--provider P` to filter to a single provider; `daily` is always per-model so only `--provider` applies. `by-hour` / `by-weekday-hour` query `hourly_usage` (currently claude-only).
 - `lib/claude-cost-common.sh` — Config loading, path definitions (`DB`, `LOG`, `LOCK_DIR`), `yesterday()` portable date helper (macOS `date -v-1d` vs GNU `date -d`). Defaults: `ENABLED_PROVIDERS="claude"`, `CODEX_OFFLINE=1`.
-- `lib/fetchers/claude.sh` — `fetch_claude()`: calls `npx ccusage@VERSION daily --json`, parses `modelBreakdowns[]`, outputs TSV rows.
-- `lib/fetchers/codex.sh` — `fetch_codex()`: calls `npx -y @ccusage/codex@VERSION daily --json [--offline]`, parses `models{}` object, converts "Jan 15, 2026" dates to ISO format, distributes `costUSD` proportionally by token ratio.
+- `lib/fetchers/claude.sh` — `fetch_claude()`: calls `npx ccusage@VERSION daily --json`, parses `modelBreakdowns[]`, outputs TSV rows. `fetch_claude_hourly()`: calls `npx ccusage@VERSION blocks --json --offline -n 1`, converts UTC `startTime` to local date+hour via jq `strflocaltime` (with `TZ=$TIMEZONE`), filters `isGap`/`isActive` blocks, outputs TSV rows (no model column — `blocks` doesn't break tokens down per-model).
+- `lib/fetchers/codex.sh` — `fetch_codex()`: calls `npx -y @ccusage/codex@VERSION daily --json [--offline]`, parses `models{}` object, converts "Jan 15, 2026" dates to ISO format, distributes `costUSD` proportionally by token ratio. No hourly equivalent — `@ccusage/codex` has no `blocks` subcommand.
 
 Data flow:
 ```
@@ -31,6 +31,10 @@ for each PROVIDER in ENABLED_PROVIDERS:
   fetch_${PROVIDER}() → TSV (date, provider, model, input, output, cache_create, cache_read, cost)
   → INSERT OR REPLACE into daily_usage (single transaction)
   → update collect_metadata[last_collected_date:${PROVIDER}]
+  if fetch_${PROVIDER}_hourly exists:
+    fetch_${PROVIDER}_hourly() → TSV (date, hour, provider, input, output, cache_create, cache_read, cost, entries)
+    → INSERT OR REPLACE into hourly_usage (single transaction)
+    → update collect_metadata[last_collected_hour:${PROVIDER}]
 ```
 
 ### Windows Support
@@ -44,7 +48,8 @@ On Windows (Git Bash), `lib/claude-cost-common.sh` detects `$APPDATA` and switch
 ### SQLite Schema
 
 - `daily_usage` — Primary key: `(date, provider, model)`. Columns: input/output/cache_creation/cache_read tokens, cost_usd. The `provider` column distinguishes rows from different sources (e.g. `claude`, `codex`).
-- `collect_metadata` — Key-value store. Watermark keys are namespaced per provider: `last_collected_date:claude`, `last_collected_date:codex`.
+- `hourly_usage` — Primary key: `(date, hour, provider)`. Columns: tokens, cost_usd, entries (number of session events in that hour). `date` and `hour` are already converted to the configured `TIMEZONE` (no UTC offset needed at query time). **No model column** — ccusage `blocks` doesn't break down tokens per-model within a block.
+- `collect_metadata` — Key-value store. Watermark keys are namespaced per provider: `last_collected_date:claude`, `last_collected_date:codex`, `last_collected_hour:claude`.
 
 ### Schema Migration
 
@@ -98,11 +103,18 @@ Tests 6–8: codex-specific behaviour
 - Test 7: Codex Jan 16 cost allocation ≈ $1.20 (within ±0.01)
 - Test 8: Summary output contains "Cost by Provider"
 
-Test 9: Migration
+Tests 9–12: hourly behaviour (claude only)
+- Test 9: 3 hourly rows in DB (4 mock blocks minus 1 `isGap=true`)
+- Test 10: `last_collected_hour:claude` watermark = 2026-01-16
+- Test 11: `by-hour` report shows expected hour buckets (09:00 / 10:00 / 14:00)
+- Test 12: `by-weekday-hour` heatmap renders 7 weekday rows + legend
+
+Test 13: Migration
 - Creates old-schema DB (no provider column, old watermark key)
 - Runs collect, verifies provider column added, old data migrated as `provider='claude'`, watermark key renamed
 
 ## Upstream Dependencies
 
-- ccusage JSON schema: `{ daily: [{ date, modelBreakdowns: [{ modelName, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, cost }] }] }`
+- ccusage daily JSON schema: `{ daily: [{ date, modelBreakdowns: [{ modelName, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, cost }] }] }`
+- ccusage blocks (`-n 1` for hourly) JSON schema: `{ blocks: [{ id, startTime (UTC ISO), endTime, actualEndTime, isActive, isGap, entries, tokenCounts: { inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens }, totalTokens, costUSD, models: [<name>...] }] }` — `models` is a name list only; no per-model token breakdown
 - @ccusage/codex JSON schema: `{ daily: [{ date, totalTokens, costUSD, models: { <name>: { inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens, isFallback } } }] }` — dates in "Jan 15, 2026" format

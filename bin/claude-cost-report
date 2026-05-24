@@ -115,16 +115,19 @@ usage() {
 Usage: claude-cost-report <command> [options]
 
 Commands:
-  daily       [report-opts]   Last N days per-model breakdown (default: 30)
-  daily-total [report-opts]   Last N days aggregated totals (default: 30)
-  weekly      [report-opts]   Last N ISO weeks summary (default: 8)
-  monthly     [report-opts]   Last N months summary (default: 6)
-  summary                     Overall usage summary
-  csv         [--output FILE] Export all data as CSV
+  daily            [report-opts]   Last N days per-model breakdown (default: 30)
+  daily-total      [report-opts]   Last N days aggregated totals (default: 30)
+  weekly           [report-opts]   Last N ISO weeks summary (default: 8)
+  monthly          [report-opts]   Last N months summary (default: 6)
+  by-hour          [report-opts]   Hour-of-day usage over last N days (default: 14)
+  by-weekday-hour  [report-opts]   7×24 weekday/hour heatmap over last N days (default: 28)
+  summary                          Overall usage summary
+  csv              [--output FILE] Export all data as CSV
 
-Report options (daily / daily-total / weekly / monthly):
+Report options (daily / daily-total / weekly / monthly / by-hour / by-weekday-hour):
   --last N       Number of days/weeks/months to show
   --by-provider  Split rows by provider (default: aggregated across providers)
+                 (ignored by by-hour / by-weekday-hour)
   --provider P   Filter to a single provider (e.g. claude, codex)
 
 Other:
@@ -346,6 +349,112 @@ ORDER BY SUM(cost_usd) DESC;
 "
 }
 
+cmd_by_hour() {
+    parse_report_opts 14 "$@"
+    local prov_clause days
+    prov_clause=$(provider_clause)
+    days=$((LAST_VAL - 1))
+
+    section "Hour-of-day Usage (last ${LAST_VAL} days$(provider_suffix))"
+    query_table "
+SELECT
+    printf('%02d:00', hour) AS hour,
+    COUNT(DISTINCT date) AS days,
+    printf('%,d', SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)) AS total_tokens,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    printf('%.1f%%', SUM(cost_usd) * 100.0 / (
+        SELECT MAX(SUM(cost_usd), 0.0001) FROM hourly_usage
+        WHERE date >= date('now', '-${days} days') ${prov_clause}
+    )) AS pct
+FROM hourly_usage
+WHERE date >= date('now', '-${days} days')
+${prov_clause}
+GROUP BY hour
+ORDER BY hour;
+"
+}
+
+cmd_by_weekday_hour() {
+    parse_report_opts 28 "$@"
+    local prov_clause days
+    prov_clause=$(provider_clause)
+    days=$((LAST_VAL - 1))
+
+    section "Weekday × Hour Heatmap (last ${LAST_VAL} days$(provider_suffix))"
+
+    # Query: weekday (0=Sun .. 6=Sat), hour, cost — only cells with data.
+    # Render as 7×24 grid via awk; shade by relative cost.
+    local rows max_cost
+    rows=$(sqlite3 -separator $'\t' "$DB" "
+SELECT CAST(strftime('%w', date) AS INTEGER), hour, SUM(cost_usd)
+FROM hourly_usage
+WHERE date >= date('now', '-${days} days')
+${prov_clause}
+GROUP BY 1, 2;
+")
+
+    if [ -z "$rows" ]; then
+        echo "  (no data in window)"
+        echo ""
+        return
+    fi
+
+    max_cost=$(printf '%s\n' "$rows" | awk -F'\t' 'BEGIN{m=0} {if($3+0>m)m=$3+0} END{print m}')
+
+    printf '%s\n' "$rows" | awk -F'\t' -v max="$max_cost" '
+    BEGIN {
+        # Shade ramp (8 levels including blank). Higher = denser.
+        shades[0] = " "
+        shades[1] = "·"
+        shades[2] = "░"
+        shades[3] = "▒"
+        shades[4] = "▓"
+        shades[5] = "█"
+        n_shades = 6
+        wd_name[0] = "Sun"; wd_name[1] = "Mon"; wd_name[2] = "Tue"
+        wd_name[3] = "Wed"; wd_name[4] = "Thu"; wd_name[5] = "Fri"; wd_name[6] = "Sat"
+    }
+    {
+        cell[$1 "," $2] = $3 + 0
+    }
+    END {
+        # Header: hour digits 00..23
+        printf "      "
+        for (h = 0; h < 24; h++) printf "%2d", h
+        printf "\n"
+        printf "      "
+        for (h = 0; h < 24; h++) printf "--"
+        printf "\n"
+
+        for (wd = 0; wd < 7; wd++) {
+            printf "%s | ", wd_name[wd]
+            for (h = 0; h < 24; h++) {
+                v = cell[wd "," h] + 0
+                if (max <= 0 || v <= 0) {
+                    idx = 0
+                } else {
+                    # Map (0, max] → [1, n_shades-1]
+                    idx = int(v / max * (n_shades - 1) + 0.999)
+                    if (idx < 1) idx = 1
+                    if (idx > n_shades - 1) idx = n_shades - 1
+                }
+                printf "%s ", shades[idx]
+            }
+            printf "\n"
+        }
+
+        # Legend
+        printf "\n  Legend (cost intensity): "
+        for (i = 1; i < n_shades; i++) {
+            lo = max * (i - 1) / (n_shades - 1)
+            hi = max * i / (n_shades - 1)
+            printf "%s=$%.2f ", shades[i], hi
+        }
+        printf "(max=$%.2f)\n", max
+    }'
+    echo ""
+}
+
 cmd_csv() {
     local output=""
     while [[ $# -gt 0 ]]; do
@@ -371,12 +480,14 @@ if [ $# -lt 1 ]; then
 fi
 
 case "$1" in
-    daily)       shift; cmd_daily "$@" ;;
-    daily-total) shift; cmd_daily_total "$@" ;;
-    weekly)      shift; cmd_weekly "$@" ;;
-    monthly)     shift; cmd_monthly "$@" ;;
-    summary)     shift; cmd_summary "$@" ;;
-    csv)         shift; cmd_csv "$@" ;;
-    --version)   echo "claude-cost-report $VERSION" ;;
-    *)           usage ;;
+    daily)           shift; cmd_daily "$@" ;;
+    daily-total)     shift; cmd_daily_total "$@" ;;
+    weekly)          shift; cmd_weekly "$@" ;;
+    monthly)         shift; cmd_monthly "$@" ;;
+    by-hour)         shift; cmd_by_hour "$@" ;;
+    by-weekday-hour) shift; cmd_by_weekday_hour "$@" ;;
+    summary)         shift; cmd_summary "$@" ;;
+    csv)             shift; cmd_csv "$@" ;;
+    --version)       echo "claude-cost-report $VERSION" ;;
+    *)               usage ;;
 esac

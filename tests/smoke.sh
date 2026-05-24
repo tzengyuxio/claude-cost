@@ -29,7 +29,12 @@ MOCK_BIN="$TEST_DIR/mock-bin"
 mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/npx" <<'MOCK'
 #!/bin/bash
-# Mock npx: dispatch to claude or codex mock based on arguments
+# Mock npx: dispatch to claude (daily/blocks) or codex mock based on arguments
+is_blocks=0
+for arg in "$@"; do
+    [[ "$arg" == "blocks" ]] && is_blocks=1
+done
+
 for arg in "$@"; do
     if [[ "$arg" == *"@ccusage/codex@"* ]]; then
         # Codex mock: "Jan 15, 2026" format, models object, costUSD, cost split by token ratio
@@ -88,6 +93,89 @@ JSON
         exit 0
     fi
 done
+
+# Claude blocks mock (hourly)
+if [ "$is_blocks" -eq 1 ]; then
+    cat <<'JSON'
+{
+  "blocks": [
+    {
+      "id": "2026-01-15T09:00:00.000Z",
+      "startTime": "2026-01-15T09:00:00.000Z",
+      "endTime": "2026-01-15T10:00:00.000Z",
+      "actualEndTime": "2026-01-15T09:45:00.000Z",
+      "isActive": false,
+      "isGap": false,
+      "entries": 5,
+      "tokenCounts": {
+        "inputTokens": 400,
+        "outputTokens": 200,
+        "cacheCreationInputTokens": 800,
+        "cacheReadInputTokens": 2000
+      },
+      "totalTokens": 3400,
+      "costUSD": 0.60,
+      "models": ["claude-test-model"]
+    },
+    {
+      "id": "2026-01-15T14:00:00.000Z",
+      "startTime": "2026-01-15T14:00:00.000Z",
+      "endTime": "2026-01-15T15:00:00.000Z",
+      "actualEndTime": "2026-01-15T14:30:00.000Z",
+      "isActive": false,
+      "isGap": false,
+      "entries": 3,
+      "tokenCounts": {
+        "inputTokens": 600,
+        "outputTokens": 300,
+        "cacheCreationInputTokens": 1200,
+        "cacheReadInputTokens": 3000
+      },
+      "totalTokens": 5100,
+      "costUSD": 0.90,
+      "models": ["claude-test-model"]
+    },
+    {
+      "id": "2026-01-15T15:00:00.000Z",
+      "startTime": "2026-01-15T15:00:00.000Z",
+      "endTime": "2026-01-15T20:00:00.000Z",
+      "actualEndTime": null,
+      "isActive": false,
+      "isGap": true,
+      "entries": 0,
+      "tokenCounts": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0
+      },
+      "totalTokens": 0,
+      "costUSD": 0,
+      "models": []
+    },
+    {
+      "id": "2026-01-16T10:00:00.000Z",
+      "startTime": "2026-01-16T10:00:00.000Z",
+      "endTime": "2026-01-16T11:00:00.000Z",
+      "actualEndTime": "2026-01-16T10:55:00.000Z",
+      "isActive": false,
+      "isGap": false,
+      "entries": 8,
+      "tokenCounts": {
+        "inputTokens": 1000,
+        "outputTokens": 500,
+        "cacheCreationInputTokens": 2000,
+        "cacheReadInputTokens": 5000
+      },
+      "totalTokens": 8500,
+      "costUSD": 1.25,
+      "models": ["claude-test-model", "claude-other-model"]
+    }
+  ]
+}
+JSON
+    exit 0
+fi
 
 # Default: Claude mock
 cat <<'JSON'
@@ -154,7 +242,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/9] Testing first collection (claude + codex)..."
+echo "[1/13] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -166,7 +254,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/9] Testing idempotent re-run..."
+echo "[2/13] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -177,7 +265,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/9] Testing report summary (claude total \$4.25)..."
+echo "[3/13] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -189,7 +277,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/9] Testing weekly report..."
+echo "[4/13] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -200,7 +288,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/9] Testing CSV export..."
+echo "[5/13] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -213,7 +301,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/9] Testing codex rows in DB..."
+echo "[6/13] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -223,7 +311,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/9] Testing codex cost allocation for Jan 16..."
+echo "[7/13] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -235,7 +323,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/9] Testing summary contains 'Cost by Provider'..."
+echo "[8/13] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -245,8 +333,68 @@ else
     exit 1
 fi
 
-# --- Test 9: Migration from old schema ---
-echo "[9/9] Testing schema migration from old (no provider column) schema..."
+# --- Test 9: Hourly rows inserted ---
+echo "[9/13] Testing hourly_usage rows (gap block filtered out)..."
+HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
+# Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
+if [ "$HOURLY_ROWS" -eq 3 ]; then
+    echo "  PASS: 3 hourly rows inserted"
+else
+    echo "  FAIL: Expected 3 hourly rows, got $HOURLY_ROWS"
+    sqlite3 "$DB" "SELECT * FROM hourly_usage;"
+    exit 1
+fi
+
+# --- Test 10: Hourly watermark set ---
+echo "[10/13] Testing hourly watermark set to 2026-01-16..."
+HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
+if [ "$HOURLY_WM" = "2026-01-16" ]; then
+    echo "  PASS: hourly watermark = $HOURLY_WM"
+else
+    echo "  FAIL: Expected watermark 2026-01-16, got '$HOURLY_WM'"
+    exit 1
+fi
+
+# --- Test 11: by-hour report contains expected hour buckets ---
+echo "[11/13] Testing by-hour report shows hours 09 / 10 / 14..."
+BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
+if echo "$BY_HOUR" | grep -q '09:00' \
+   && echo "$BY_HOUR" | grep -q '10:00' \
+   && echo "$BY_HOUR" | grep -q '14:00'; then
+    echo "  PASS: by-hour shows expected hour buckets"
+else
+    echo "  FAIL: by-hour missing expected hours"
+    echo "$BY_HOUR"
+    exit 1
+fi
+
+# --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
+echo "[12/13] Testing by-weekday-hour heatmap has 7 weekday rows..."
+HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
+WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
+if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
+    echo "  PASS: 7 weekday rows + legend"
+else
+    echo "  FAIL: Expected 7 weekday rows + legend, got $WD_COUNT rows"
+    echo "$HEATMAP"
+    exit 1
+fi
+
+# --- Test 13a: Hourly runs independently of daily watermark ---
+# Regression: daily skipping (already up-to-date) must not skip hourly.
+echo "[13a] Testing hourly fetches even when daily is already up to date..."
+sqlite3 "$DB" "DELETE FROM hourly_usage; DELETE FROM collect_metadata WHERE key='last_collected_hour:claude';"
+bash "$REPO_DIR/bin/claude-cost-collect"
+HOURLY_AFTER_REFILL=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
+if [ "$HOURLY_AFTER_REFILL" -eq 3 ]; then
+    echo "  PASS: hourly repopulated to 3 rows despite daily watermark being current"
+else
+    echo "  FAIL: Expected 3 hourly rows after refill, got $HOURLY_AFTER_REFILL"
+    exit 1
+fi
+
+# --- Test 13: Migration from old schema ---
+echo "[13/13] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -317,4 +465,4 @@ else
 fi
 
 echo ""
-echo "=== All 9 tests passed ==="
+echo "=== All 13 tests passed ==="
