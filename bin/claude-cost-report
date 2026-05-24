@@ -356,16 +356,18 @@ cmd_by_hour() {
     days=$((LAST_VAL - 1))
 
     section "Hour-of-day Usage (last ${LAST_VAL} days$(provider_suffix))"
+    # Percentages are token-based: on Max-plan accounts most cost values
+    # are $0, so cost-based pct is dominated by sporadic fallback billing.
     query_table "
 SELECT
     printf('%02d:00', hour) AS hour,
     COUNT(DISTINCT date) AS days,
     printf('%,d', SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)) AS total_tokens,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    printf('%.1f%%', SUM(cost_usd) * 100.0 / (
-        SELECT MAX(SUM(cost_usd), 0.0001) FROM hourly_usage
+    printf('%.1f%%', SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) * 100.0 / (
+        SELECT MAX(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 1) FROM hourly_usage
         WHERE date >= date('now', '-${days} days') ${prov_clause}
-    )) AS pct
+    )) AS pct,
+    printf('\$%.2f', SUM(cost_usd)) AS total_cost
 FROM hourly_usage
 WHERE date >= date('now', '-${days} days')
 ${prov_clause}
@@ -382,11 +384,13 @@ cmd_by_weekday_hour() {
 
     section "Weekday × Hour Heatmap (last ${LAST_VAL} days$(provider_suffix))"
 
-    # Query: weekday (0=Sun .. 6=Sat), hour, cost — only cells with data.
-    # Render as 7×24 grid via awk; shade by relative cost.
-    local rows max_cost
+    # Intensity = total tokens (input + output + cache_creation + cache_read).
+    # Token volume gives a meaningful activity signal even on Max plans,
+    # where most cost values are $0.
+    local rows max_tokens
     rows=$(sqlite3 -separator $'\t' "$DB" "
-SELECT CAST(strftime('%w', date) AS INTEGER), hour, SUM(cost_usd)
+SELECT CAST(strftime('%w', date) AS INTEGER), hour,
+       SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)
 FROM hourly_usage
 WHERE date >= date('now', '-${days} days')
 ${prov_clause}
@@ -399,11 +403,17 @@ GROUP BY 1, 2;
         return
     fi
 
-    max_cost=$(printf '%s\n' "$rows" | awk -F'\t' 'BEGIN{m=0} {if($3+0>m)m=$3+0} END{print m}')
+    max_tokens=$(printf '%s\n' "$rows" | awk -F'\t' 'BEGIN{m=0} {if($3+0>m)m=$3+0} END{print m}')
 
-    printf '%s\n' "$rows" | awk -F'\t' -v max="$max_cost" '
+    printf '%s\n' "$rows" | awk -F'\t' -v max="$max_tokens" '
+    function fmt_tokens(v) {
+        if (v >= 1e9) return sprintf("%.1fB", v/1e9)
+        if (v >= 1e6) return sprintf("%.1fM", v/1e6)
+        if (v >= 1e3) return sprintf("%.1fK", v/1e3)
+        return sprintf("%d", v)
+    }
     BEGIN {
-        # Shade ramp (8 levels including blank). Higher = denser.
+        # Shade ramp (6 levels including blank). Higher = denser.
         shades[0] = " "
         shades[1] = "·"
         shades[2] = "░"
@@ -444,13 +454,12 @@ GROUP BY 1, 2;
         }
 
         # Legend
-        printf "\n  Legend (cost intensity): "
+        printf "\n  Legend (token intensity): "
         for (i = 1; i < n_shades; i++) {
-            lo = max * (i - 1) / (n_shades - 1)
             hi = max * i / (n_shades - 1)
-            printf "%s=$%.2f ", shades[i], hi
+            printf "%s≤%s ", shades[i], fmt_tokens(hi)
         }
-        printf "(max=$%.2f)\n", max
+        printf "(max=%s)\n", fmt_tokens(max)
     }'
     echo ""
 }
