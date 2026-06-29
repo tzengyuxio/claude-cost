@@ -37,7 +37,14 @@ LOG="$TRACKING_DIR/logs/collect.log"
 # shellcheck disable=SC2034
 LOCK_DIR="$TRACKING_DIR/.lock"
 
-# Portable date helper (macOS vs GNU coreutils)
+# Portable date helper (macOS vs GNU coreutils).
+# Computes "yesterday" in the configured TIMEZONE, not the system-local zone:
+# data is bucketed by date in TIMEZONE, so the watermark must advance only past
+# days that are fully elapsed in TIMEZONE. If we used the local zone and it ran
+# ahead of TIMEZONE (e.g. system in UTC+8 but TIMEZONE=UTC), an early-morning
+# collection would treat an in-progress TIMEZONE day as "yesterday", advance the
+# watermark past it, and permanently drop that day's later hours.
 yesterday() {
-    date -v-1d '+%Y-%m-%d' 2>/dev/null || date -d 'yesterday' '+%Y-%m-%d'
+    TZ="${TIMEZONE:-UTC}" date -v-1d '+%Y-%m-%d' 2>/dev/null \
+        || TZ="${TIMEZONE:-UTC}" date -d 'yesterday' '+%Y-%m-%d'
 }
