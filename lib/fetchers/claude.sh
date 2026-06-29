@@ -46,6 +46,9 @@ fetch_claude() {
 # Calls ccusage blocks -n 1 (one-hour buckets), converts UTC startTime to
 # local (TIMEZONE) date+hour via jq strflocaltime, filters out gap/active blocks.
 # Outputs TSV: date, hour, provider, input, output, cache_creation, cache_read, cost, entries
+# Runs online (no --offline) so ccusage looks up the pricing table and fills
+# costUSD for every block — matching fetch_claude (daily). With --offline, blocks
+# reports only the sparse pre-embedded JSONL costs, leaving most hours at $0.
 fetch_claude_hourly() {
     local last="$1"
     local yesterday="$2"
@@ -61,7 +64,7 @@ fetch_claude_hourly() {
     fi
 
     # shellcheck disable=SC2086  # intentional word-splitting for optional flag
-    if ! npx "ccusage@${CCUSAGE_VERSION}" blocks --json --offline -n 1 \
+    if ! npx "ccusage@${CCUSAGE_VERSION}" blocks --json -n 1 \
             --timezone "$TIMEZONE" $since_args > "$tmpfile" 2> "$errfile"; then
         echo "ERROR: ccusage blocks (claude hourly) failed" >&2
         [[ -s "$errfile" ]] && sed 's/^/  | /' "$errfile" >&2
