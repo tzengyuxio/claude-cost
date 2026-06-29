@@ -119,7 +119,7 @@ Commands:
   daily-total      [report-opts]   Last N days aggregated totals (default: 30)
   weekly           [report-opts]   Last N ISO weeks summary (default: 8)
   monthly          [report-opts]   Last N months summary (default: 6)
-  by-hour          [report-opts]   Hour-of-day usage over last N days (default: 14)
+  by-hour          [report-opts]   Hour-of-day usage over last N days (default: 28)
   by-weekday-hour  [report-opts]   7×24 weekday/hour heatmap over last N days (default: 28)
   summary                          Overall usage summary
   csv              [--output FILE] Export all data as CSV
@@ -350,7 +350,7 @@ ORDER BY SUM(cost_usd) DESC;
 }
 
 cmd_by_hour() {
-    parse_report_opts 14 "$@"
+    parse_report_opts 28 "$@"
     local prov_clause days shift_mod tz_note
     prov_clause=$(provider_clause)
     days=$((LAST_VAL - 1))
@@ -436,12 +436,13 @@ GROUP BY 1, 2;
         cell[$1 "," $2] = $3 + 0
     }
     END {
-        # Header: hour digits 00..23
+        # 3-char columns: hours right-aligned (%3d), each shade doubled and
+        # right-aligned beneath its hour number so cells line up with the header.
         printf "      "
-        for (h = 0; h < 24; h++) printf "%2d", h
+        for (h = 0; h < 24; h++) printf "%3d", h
         printf "\n"
         printf "      "
-        for (h = 0; h < 24; h++) printf "--"
+        for (h = 0; h < 24; h++) printf "---"
         printf "\n"
 
         for (wd = 0; wd < 7; wd++) {
@@ -456,7 +457,7 @@ GROUP BY 1, 2;
                     if (idx < 1) idx = 1
                     if (idx > n_shades - 1) idx = n_shades - 1
                 }
-                printf "%s ", shades[idx]
+                printf " %s%s", shades[idx], shades[idx]
             }
             printf "\n"
         }

@@ -116,7 +116,7 @@ claude-cost-report weekly --last 4
 # Monthly summary
 claude-cost-report monthly
 
-# Hour-of-day breakdown (last 14 days by default) — when are you most active?
+# Hour-of-day breakdown (last 28 days by default) — when are you most active?
 claude-cost-report by-hour
 
 # 7×24 weekday/hour heatmap (last 28 days by default)
