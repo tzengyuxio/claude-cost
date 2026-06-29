@@ -29,6 +29,13 @@ if [ -f "$_CC_CONFIG" ]; then
     . "$_CC_CONFIG"
 fi
 
+# Display timezone for the hour-of-day reports (by-hour / by-weekday-hour).
+# Storage is bucketed in TIMEZONE; these reports re-project hours into
+# REPORT_TIMEZONE at query time (no re-bucketing of stored rows). Defaults to
+# TIMEZONE → no shift. Resolved after config load so it tracks a config override.
+# shellcheck disable=SC2034
+REPORT_TIMEZONE="${REPORT_TIMEZONE:-$TIMEZONE}"
+
 # Derived paths (used by sourcing scripts)
 # shellcheck disable=SC2034
 DB="$TRACKING_DIR/usage.db"
@@ -47,4 +54,22 @@ LOCK_DIR="$TRACKING_DIR/.lock"
 yesterday() {
     TZ="${TIMEZONE:-UTC}" date -v-1d '+%Y-%m-%d' 2>/dev/null \
         || TZ="${TIMEZONE:-UTC}" date -d 'yesterday' '+%Y-%m-%d'
+}
+
+# Minutes east of UTC for a named zone, sampled at the current instant.
+# Note: a single snapshot, so DST-free zones (UTC, Asia/Taipei) are exact;
+# zones with DST are off by an hour for rows on the other side of a transition.
+tz_offset_minutes() {
+    local z sign h m v
+    z=$(TZ="$1" date '+%z')   # e.g. +0800 / -0500
+    sign="${z:0:1}"; h="${z:1:2}"; m="${z:3:2}"
+    v=$(( 10#$h * 60 + 10#$m ))
+    [[ "$sign" == "-" ]] && v=$(( -v ))
+    printf '%d' "$v"
+}
+
+# Minutes to add to a stored (TIMEZONE-bucketed) timestamp to display it in
+# REPORT_TIMEZONE. Used by the hour-of-day reports as a SQLite datetime shift.
+report_tz_shift_minutes() {
+    echo $(( $(tz_offset_minutes "${REPORT_TIMEZONE:-UTC}") - $(tz_offset_minutes "${TIMEZONE:-UTC}") ))
 }

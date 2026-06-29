@@ -20,8 +20,8 @@ Scripts are plain bash. No build step. `bin/` scripts source `lib/claude-cost-co
 Two entry points, one shared library, and a fetcher layer:
 
 - `bin/claude-cost-collect` — Runs enabled provider fetchers, filters by per-provider date watermark, inserts into SQLite in a single transaction per provider. Uses directory-based locking (`$TRACKING_DIR/.lock` via `mkdir`). Designed for launchd/systemd cron; handles backfill for missed days automatically. After the daily fetch, if a `fetch_${PROVIDER}_hourly` function exists, also runs hourly collection into `hourly_usage`.
-- `bin/claude-cost-report` — Read-only queries against the DB. Subcommands: `daily`, `daily-total`, `weekly`, `monthly`, `by-hour`, `by-weekday-hour`, `summary`, `csv`. All formatted output goes through `render_table` (awk function that auto-detects numeric columns for right-alignment). The `summary` command includes a "Cost by Provider" breakdown. `daily-total` / `weekly` / `monthly` accept `--by-provider` to split rows per provider, and `--provider P` to filter to a single provider; `daily` is always per-model so only `--provider` applies. `by-hour` / `by-weekday-hour` query `hourly_usage` (currently claude-only).
-- `lib/claude-cost-common.sh` — Config loading, path definitions (`DB`, `LOG`, `LOCK_DIR`), `yesterday()` portable date helper (macOS `date -v-1d` vs GNU `date -d`). Defaults: `ENABLED_PROVIDERS="claude"`, `CODEX_OFFLINE=1`.
+- `bin/claude-cost-report` — Read-only queries against the DB. Subcommands: `daily`, `daily-total`, `weekly`, `monthly`, `by-hour`, `by-weekday-hour`, `summary`, `csv`. All formatted output goes through `render_table` (awk function that auto-detects numeric columns for right-alignment). The `summary` command includes a "Cost by Provider" breakdown. `daily-total` / `weekly` / `monthly` accept `--by-provider` to split rows per provider, and `--provider P` to filter to a single provider; `daily` is always per-model so only `--provider` applies. `by-hour` / `by-weekday-hour` query `hourly_usage` (currently claude-only) and re-project stored hours into `REPORT_TIMEZONE` at query time (a fixed-offset SQLite `datetime(...)` shift), labelling the display zone in the section header.
+- `lib/claude-cost-common.sh` — Config loading, path definitions (`DB`, `LOG`, `LOCK_DIR`), `yesterday()` portable date helper (computes "yesterday" under `TZ=$TIMEZONE`, so the watermark only advances past days fully elapsed in the bucketing zone — otherwise an early-morning run in a zone ahead of `TIMEZONE` drops the in-progress day's later hours), and `report_tz_shift_minutes()` (offset between `TIMEZONE` and `REPORT_TIMEZONE` for the hour-of-day reports). Defaults: `ENABLED_PROVIDERS="claude"`, `CODEX_OFFLINE=1`, `REPORT_TIMEZONE=$TIMEZONE`.
 - `lib/fetchers/claude.sh` — `fetch_claude()`: calls `npx ccusage@VERSION daily --json`, parses `modelBreakdowns[]`, outputs TSV rows. `fetch_claude_hourly()`: calls `npx ccusage@VERSION blocks --json --offline -n 1`, converts UTC `startTime` to local date+hour via jq `strflocaltime` (with `TZ=$TIMEZONE`), filters `isGap`/`isActive` blocks, outputs TSV rows (no model column — `blocks` doesn't break tokens down per-model).
 - `lib/fetchers/codex.sh` — `fetch_codex()`: calls `npx -y @ccusage/codex@VERSION daily --json [--offline]`, parses `models{}` object, converts "Jan 15, 2026" dates to ISO format, distributes `costUSD` proportionally by token ratio. No hourly equivalent — `@ccusage/codex` has no `blocks` subcommand.
 
@@ -48,7 +48,7 @@ On Windows (Git Bash), `lib/claude-cost-common.sh` detects `$APPDATA` and switch
 ### SQLite Schema
 
 - `daily_usage` — Primary key: `(date, provider, model)`. Columns: input/output/cache_creation/cache_read tokens, cost_usd. The `provider` column distinguishes rows from different sources (e.g. `claude`, `codex`).
-- `hourly_usage` — Primary key: `(date, hour, provider)`. Columns: tokens, cost_usd, entries (number of session events in that hour). `date` and `hour` are already converted to the configured `TIMEZONE` (no UTC offset needed at query time). **No model column** — ccusage `blocks` doesn't break down tokens per-model within a block.
+- `hourly_usage` — Primary key: `(date, hour, provider)`. Columns: tokens, cost_usd, entries (number of session events in that hour). `date` and `hour` are stored bucketed in the configured `TIMEZONE`; the hour-of-day reports apply a further fixed-offset shift to `REPORT_TIMEZONE` only at display time (storage is never re-bucketed). **No model column** — ccusage `blocks` doesn't break down tokens per-model within a block.
 - `collect_metadata` — Key-value store. Watermark keys are namespaced per provider: `last_collected_date:claude`, `last_collected_date:codex`, `last_collected_hour:claude`.
 
 ### Schema Migration
@@ -67,7 +67,8 @@ Key variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `TIMEZONE` | `UTC` | Timezone for date grouping |
+| `TIMEZONE` | `UTC` | Timezone for date grouping (storage) |
+| `REPORT_TIMEZONE` | `$TIMEZONE` | Display timezone for `by-hour` / `by-weekday-hour` only (re-projected at query time, no re-bucketing) |
 | `CCUSAGE_VERSION` | `18.0.10` | Pinned ccusage (Claude) npm version |
 | `CCUSAGE_CODEX_VERSION` | `18.0.10` | Pinned @ccusage/codex npm version |
 | `ENABLED_PROVIDERS` | `claude` | Space-separated list of active providers |
@@ -107,6 +108,7 @@ Tests 9–12: hourly behaviour (claude only)
 - Test 9: 3 hourly rows in DB (4 mock blocks minus 1 `isGap=true`)
 - Test 10: `last_collected_hour:claude` watermark = 2026-01-16
 - Test 11: `by-hour` report shows expected hour buckets (09:00 / 10:00 / 14:00)
+- Test 11b: `REPORT_TIMEZONE=Asia/Taipei` re-projects by-hour buckets (+8 → 17:00 / 18:00 / 22:00) and labels the display timezone
 - Test 12: `by-weekday-hour` heatmap renders 7 weekday rows + legend
 
 Test 13: Migration

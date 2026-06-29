@@ -351,17 +351,20 @@ ORDER BY SUM(cost_usd) DESC;
 
 cmd_by_hour() {
     parse_report_opts 14 "$@"
-    local prov_clause days
+    local prov_clause days shift_mod tz_note
     prov_clause=$(provider_clause)
     days=$((LAST_VAL - 1))
+    # Re-project stored (TIMEZONE) hours into REPORT_TIMEZONE for display.
+    shift_mod="$(printf '%+d' "$(report_tz_shift_minutes)") minutes"
+    tz_note=" — times in ${REPORT_TIMEZONE}"
 
-    section "Hour-of-day Usage (last ${LAST_VAL} days$(provider_suffix))"
+    section "Hour-of-day Usage (last ${LAST_VAL} days$(provider_suffix)${tz_note})"
     # Percentages are token-based: on Max-plan accounts most cost values
     # are $0, so cost-based pct is dominated by sporadic fallback billing.
     query_table "
 SELECT
-    printf('%02d:00', hour) AS hour,
-    COUNT(DISTINCT date) AS days,
+    printf('%02d:00', CAST(strftime('%H', datetime(date || ' ' || printf('%02d:00', hour), '${shift_mod}')) AS INTEGER)) AS hour,
+    COUNT(DISTINCT date(datetime(date || ' ' || printf('%02d:00', hour), '${shift_mod}'))) AS days,
     printf('%,d', SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)) AS total_tokens,
     printf('%.1f%%', SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) * 100.0 / (
         SELECT MAX(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 1) FROM hourly_usage
@@ -371,25 +374,30 @@ SELECT
 FROM hourly_usage
 WHERE date >= date('now', '-${days} days')
 ${prov_clause}
-GROUP BY hour
-ORDER BY hour;
+GROUP BY 1
+ORDER BY 1;
 "
 }
 
 cmd_by_weekday_hour() {
     parse_report_opts 28 "$@"
-    local prov_clause days
+    local prov_clause days shift_mod
     prov_clause=$(provider_clause)
     days=$((LAST_VAL - 1))
+    # Re-project stored (TIMEZONE) timestamps into REPORT_TIMEZONE for display;
+    # the shift can roll an hour across a weekday boundary, so derive both the
+    # weekday and the hour from the shifted timestamp.
+    shift_mod="$(printf '%+d' "$(report_tz_shift_minutes)") minutes"
 
-    section "Weekday × Hour Heatmap (last ${LAST_VAL} days$(provider_suffix))"
+    section "Weekday × Hour Heatmap (last ${LAST_VAL} days$(provider_suffix) — times in ${REPORT_TIMEZONE})"
 
     # Intensity = total tokens (input + output + cache_creation + cache_read).
     # Token volume gives a meaningful activity signal even on Max plans,
     # where most cost values are $0.
     local rows max_tokens
     rows=$(sqlite3 -separator $'\t' "$DB" "
-SELECT CAST(strftime('%w', date) AS INTEGER), hour,
+SELECT CAST(strftime('%w', datetime(date || ' ' || printf('%02d:00', hour), '${shift_mod}')) AS INTEGER),
+       CAST(strftime('%H', datetime(date || ' ' || printf('%02d:00', hour), '${shift_mod}')) AS INTEGER),
        SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)
 FROM hourly_usage
 WHERE date >= date('now', '-${days} days')

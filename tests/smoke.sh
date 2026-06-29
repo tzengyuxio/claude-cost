@@ -368,6 +368,22 @@ else
     exit 1
 fi
 
+# --- Test 11b: REPORT_TIMEZONE shifts by-hour buckets for display ---
+# Storage is UTC; displaying in Asia/Taipei (+8) must move 09/10/14 → 17/18/22.
+echo "[11b] Testing REPORT_TIMEZONE re-projects by-hour buckets..."
+BY_HOUR_TPE=$(REPORT_TIMEZONE="Asia/Taipei" bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
+if echo "$BY_HOUR_TPE" | grep -q '17:00' \
+   && echo "$BY_HOUR_TPE" | grep -q '18:00' \
+   && echo "$BY_HOUR_TPE" | grep -q '22:00' \
+   && ! echo "$BY_HOUR_TPE" | grep -q '09:00' \
+   && echo "$BY_HOUR_TPE" | grep -q 'times in Asia/Taipei'; then
+    echo "  PASS: by-hour buckets shifted +8 and timezone labelled"
+else
+    echo "  FAIL: by-hour not re-projected to Asia/Taipei"
+    echo "$BY_HOUR_TPE"
+    exit 1
+fi
+
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
 echo "[12/13] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)

@@ -76,7 +76,8 @@ claude-cost-collect
 Edit `~/.config/claude-cost/config`:
 
 ```sh
-TIMEZONE="Asia/Taipei"           # Timezone for date grouping (default: UTC)
+TIMEZONE="UTC"                   # Timezone for date grouping in storage (default: UTC)
+REPORT_TIMEZONE="Asia/Taipei"    # Display zone for by-hour / by-weekday-hour (default: $TIMEZONE)
 CCUSAGE_VERSION="18.0.10"        # Pinned ccusage (Claude) version
 CCUSAGE_CODEX_VERSION="18.0.10"  # Pinned @ccusage/codex version
 ENABLED_PROVIDERS="claude codex" # Space-separated list of active providers
@@ -129,6 +130,8 @@ claude-cost-report csv --output costs.csv
 ```
 
 > **Note:** `by-hour` and `by-weekday-hour` read from the separate `hourly_usage` table, populated only for the `claude` provider (ccusage's `blocks` subcommand). Codex CLI exposes no hourly granularity, so it is not represented in these reports.
+>
+> These two reports display hours in `REPORT_TIMEZONE` (defaults to `TIMEZONE`), re-projecting the stored hours at query time without re-bucketing — so you can keep storage in UTC yet read the heatmap in local time. The other reports (`daily` / `weekly` / `monthly`) are date-bucketed in `TIMEZONE` at collection time and have no hour granularity to shift, so they stay in the storage timezone.
 
 ### Shell aliases
 
