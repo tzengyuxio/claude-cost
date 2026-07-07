@@ -22,7 +22,13 @@ CCUSAGE_CODEX_VERSION="18.0.10"
 # Default: 1
 CODEX_OFFLINE=1
 
-# Scheduled collection time (used by launchd/systemd)
+# Scheduled collection start time (used by launchd/systemd)
 # Default: 02:00
 SCHEDULE_HOUR=2
 SCHEDULE_MINUTE=0
+
+# Re-run every N hours starting at SCHEDULE_HOUR (24 = once daily, legacy behaviour).
+# Collection is idempotent; running several times a day lets the watermark advance
+# soon after a day fully elapses in TIMEZONE, instead of lagging when the single
+# daily run fires before UTC midnight. Default: 6 (i.e. 02/08/14/20).
+SCHEDULE_INTERVAL_HOURS=6

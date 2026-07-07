@@ -14,8 +14,13 @@ PLIST_PATH   = $(HOME)/Library/LaunchAgents/$(PLIST_LABEL).plist
 SYSTEMD_DIR  = $(HOME)/.config/systemd/user
 
 # Read config for schedule values (with defaults)
-SCHEDULE_HOUR   ?= $(shell [ -f "$(CONFDIR)/config" ] && . "$(CONFDIR)/config" 2>/dev/null; echo $${SCHEDULE_HOUR:-2})
-SCHEDULE_MINUTE ?= $(shell [ -f "$(CONFDIR)/config" ] && . "$(CONFDIR)/config" 2>/dev/null; echo $${SCHEDULE_MINUTE:-0})
+SCHEDULE_HOUR     ?= $(shell [ -f "$(CONFDIR)/config" ] && . "$(CONFDIR)/config" 2>/dev/null; echo $${SCHEDULE_HOUR:-2})
+SCHEDULE_MINUTE   ?= $(shell [ -f "$(CONFDIR)/config" ] && . "$(CONFDIR)/config" 2>/dev/null; echo $${SCHEDULE_MINUTE:-0})
+# Run every N hours starting at SCHEDULE_HOUR. 24 = once daily (legacy behaviour).
+SCHEDULE_INTERVAL_HOURS ?= $(shell [ -f "$(CONFDIR)/config" ] && . "$(CONFDIR)/config" 2>/dev/null; echo $${SCHEDULE_INTERVAL_HOURS:-6})
+# launchd StartCalendarInterval array body: one <dict> per fire time (single line; XML is whitespace-insensitive).
+CALENDAR_INTERVALS := $(shell awk -v b=$(SCHEDULE_HOUR) -v m=$(SCHEDULE_MINUTE) -v s=$(SCHEDULE_INTERVAL_HOURS) 'BEGIN{for(h=b;h<24;h+=s)printf "<dict><key>Hour</key><integer>%d</integer><key>Minute</key><integer>%d</integer></dict>",h,m}')
+SCHEDULE_DESC := every $(SCHEDULE_INTERVAL_HOURS)h from $(SCHEDULE_HOUR):$(shell printf '%02d' $(SCHEDULE_MINUTE))
 
 .PHONY: install uninstall reload-schedule lint test help
 
@@ -42,13 +47,12 @@ install: ## Install claude-cost scripts and schedule
 ifeq ($(UNAME_S),Darwin)
 	@sed \
 		-e 's|%%COLLECT_SCRIPT%%|$(BINDIR)/claude-cost-collect|g' \
-		-e 's|%%HOUR%%|$(SCHEDULE_HOUR)|g' \
-		-e 's|%%MINUTE%%|$(SCHEDULE_MINUTE)|g' \
+		-e 's|%%CALENDAR_INTERVALS%%|$(CALENDAR_INTERVALS)|g' \
 		-e 's|%%LOG_DIR%%|$(DATADIR)/logs|g' \
 		share/com.claude-cost.collect.plist.in > $(PLIST_PATH)
 	@launchctl unload $(PLIST_PATH) 2>/dev/null || true
 	@launchctl load $(PLIST_PATH)
-	@echo "  Scheduled: launchd daily at $(SCHEDULE_HOUR):$(shell printf '%02d' $(SCHEDULE_MINUTE))"
+	@echo "  Scheduled: launchd — $(SCHEDULE_DESC)"
 else
 	@mkdir -p $(SYSTEMD_DIR)
 	@sed \
@@ -57,10 +61,11 @@ else
 	@sed \
 		-e 's|%%HOUR%%|$(SCHEDULE_HOUR)|g' \
 		-e 's|%%MINUTE%%|$(SCHEDULE_MINUTE)|g' \
+		-e 's|%%INTERVAL%%|$(SCHEDULE_INTERVAL_HOURS)|g' \
 		share/claude-cost-collect.timer.in > $(SYSTEMD_DIR)/claude-cost-collect.timer
 	@systemctl --user daemon-reload
 	@systemctl --user enable --now claude-cost-collect.timer
-	@echo "  Scheduled: systemd timer daily at $(SCHEDULE_HOUR):$(shell printf '%02d' $(SCHEDULE_MINUTE))"
+	@echo "  Scheduled: systemd timer — $(SCHEDULE_DESC)"
 endif
 	@echo ""
 	@echo "Done! Run 'claude-cost-collect' for immediate first collection."
@@ -86,21 +91,21 @@ reload-schedule: ## Regenerate and reload the schedule from config
 ifeq ($(UNAME_S),Darwin)
 	@sed \
 		-e 's|%%COLLECT_SCRIPT%%|$(BINDIR)/claude-cost-collect|g' \
-		-e 's|%%HOUR%%|$(SCHEDULE_HOUR)|g' \
-		-e 's|%%MINUTE%%|$(SCHEDULE_MINUTE)|g' \
+		-e 's|%%CALENDAR_INTERVALS%%|$(CALENDAR_INTERVALS)|g' \
 		-e 's|%%LOG_DIR%%|$(DATADIR)/logs|g' \
 		share/com.claude-cost.collect.plist.in > $(PLIST_PATH)
 	@launchctl unload $(PLIST_PATH) 2>/dev/null || true
 	@launchctl load $(PLIST_PATH)
-	@echo "Reloaded: launchd daily at $(SCHEDULE_HOUR):$(shell printf '%02d' $(SCHEDULE_MINUTE))"
+	@echo "Reloaded: launchd — $(SCHEDULE_DESC)"
 else
 	@sed \
 		-e 's|%%HOUR%%|$(SCHEDULE_HOUR)|g' \
 		-e 's|%%MINUTE%%|$(SCHEDULE_MINUTE)|g' \
+		-e 's|%%INTERVAL%%|$(SCHEDULE_INTERVAL_HOURS)|g' \
 		share/claude-cost-collect.timer.in > $(SYSTEMD_DIR)/claude-cost-collect.timer
 	@systemctl --user daemon-reload
 	@systemctl --user restart claude-cost-collect.timer
-	@echo "Reloaded: systemd timer daily at $(SCHEDULE_HOUR):$(shell printf '%02d' $(SCHEDULE_MINUTE))"
+	@echo "Reloaded: systemd timer — $(SCHEDULE_DESC)"
 endif
 
 lint: ## Run shellcheck on all scripts

@@ -82,9 +82,16 @@ CCUSAGE_VERSION="18.0.10"        # Pinned ccusage (Claude) version
 CCUSAGE_CODEX_VERSION="18.0.10"  # Pinned @ccusage/codex version
 ENABLED_PROVIDERS="claude codex" # Space-separated list of active providers
 CODEX_OFFLINE=1                  # Pass --offline to codex fetcher (default: 1)
-SCHEDULE_HOUR=2                  # Collection time — hour (default: 2)
-SCHEDULE_MINUTE=0                # Collection time — minute (default: 0)
+SCHEDULE_HOUR=2                  # Collection start hour (default: 2)
+SCHEDULE_MINUTE=0                # Collection minute (default: 0)
+SCHEDULE_INTERVAL_HOURS=6        # Re-run every N hours from SCHEDULE_HOUR; 24 = once daily (default: 6)
 ```
+
+Collection is idempotent, so it runs several times a day by default (e.g. `02/08/14/20`).
+This matters when `TIMEZONE` differs from your wall clock: a single early-morning run can
+fire before the previous day has fully elapsed in `TIMEZONE`, leaving the watermark a day
+behind. Frequent re-runs let it catch up within hours instead. Set `SCHEDULE_INTERVAL_HOURS=24`
+to keep the legacy once-daily behaviour.
 
 To collect only Claude Code usage (no Codex), set:
 
@@ -160,7 +167,7 @@ month    input_tok  output_tok  cache_create  cache_read     total_cost  avg_dai
 ## How it works
 
 ```
-launchd / systemd timer (daily, e.g. 02:00)
+launchd / systemd timer (every SCHEDULE_INTERVAL_HOURS, e.g. 02/08/14/20)
   → claude-cost-collect
     → for each provider in ENABLED_PROVIDERS:
         claude: npx ccusage@VERSION daily --json --timezone $TIMEZONE

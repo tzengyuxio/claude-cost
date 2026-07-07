@@ -73,8 +73,9 @@ Key variables:
 | `CCUSAGE_CODEX_VERSION` | `18.0.10` | Pinned @ccusage/codex npm version |
 | `ENABLED_PROVIDERS` | `claude` | Space-separated list of active providers |
 | `CODEX_OFFLINE` | `1` | Pass `--offline` to codex fetcher |
-| `SCHEDULE_HOUR` | `2` | Collection time — hour |
-| `SCHEDULE_MINUTE` | `0` | Collection time — minute |
+| `SCHEDULE_HOUR` | `2` | Collection start time — hour |
+| `SCHEDULE_MINUTE` | `0` | Collection start time — minute |
+| `SCHEDULE_INTERVAL_HOURS` | `6` | Re-run cadence: every N hours from `SCHEDULE_HOUR` (24 = once daily) |
 
 ## Key Design Decisions
 
@@ -84,6 +85,7 @@ Key variables:
 - Codex cost is distributed across models proportionally by `totalTokens` ratio (Codex API only returns per-day cost, not per-model)
 - Report formatting uses awk `render_table` because macOS `column` lacks `-R` for right-alignment
 - launchd plist label is `com.claude-cost.collect` (no username in it)
+- Schedule fires every `SCHEDULE_INTERVAL_HOURS` (default 6), not once daily: `yesterday()` is computed in `TIMEZONE`, so a single run at local 02:00 while `TIMEZONE=UTC` and the host is east of UTC fires before the UTC day ends and the watermark lags ~2 days. Idempotent re-runs (launchd `StartCalendarInterval` array / systemd `OnCalendar=H/N`) let it catch up within hours without changing storage or `TIMEZONE`. Tuning is purely a scheduler concern — `collect` is unaware of cadence.
 - `render_table` auto-detects right-aligned columns by header name pattern (tok, cost, avg, etc.)
 - Windows paths use `APPDATA`/`LOCALAPPDATA` (detected via `$APPDATA` env var in Git Bash)
 - `install.bat` locates bash.exe via `git --exec-path` parent traversal

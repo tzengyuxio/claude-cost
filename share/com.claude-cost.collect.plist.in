@@ -15,12 +15,7 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>%%HOUR%%</integer>
-        <key>Minute</key>
-        <integer>%%MINUTE%%</integer>
-    </dict>
+    <array>%%CALENDAR_INTERVALS%%</array>
     <key>StandardOutPath</key>
     <string>%%LOG_DIR%%/collect.stdout.log</string>
     <key>StandardErrorPath</key>
