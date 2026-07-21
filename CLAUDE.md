@@ -143,3 +143,6 @@ A single long-running Codex session can cross this easily; one six-day session r
 
 To recover an affected session, split the rollout into chunks small enough to read. Each chunk needs the `session_meta` header line **and** the most recent preceding `turn_context` event prepended; `turn_context` carries the model name, and chunks missing it get their tokens misattributed to a default model (`gpt-5`) while daily totals still look correct. Verify a re-chunk per model, not just per day.
 
+### Known limitation: cost allocation across unpriced models
+
+Day cost is split across models by token ratio, but ccusage assigns $0 to models it has no pricing for (e.g. `codex-auto-review`, which triggers a "Pricing not found" warning). Nothing in the JSON distinguishes these — `isFallback` stays `false` — so the fetcher cannot exclude them, and they absorb a share of cost that belongs to the priced models. Fixing this needs per-model cost from upstream, or a local pricing table; neither fits this tool's role as a thin wrapper.
