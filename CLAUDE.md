@@ -113,6 +113,8 @@ Tests 9–12: hourly behaviour (claude only)
 - Test 11b: `REPORT_TIMEZONE=Asia/Taipei` re-projects by-hour buckets (+8 → 17:00 / 18:00 / 22:00) and labels the display timezone
 - Test 12: `by-weekday-hour` heatmap renders 7 weekday rows + legend
 
+Test 14: `reasoningOutputTokens` is not added on top of `outputTokens` (it is a subset)
+
 Test 13: Migration
 - Creates old-schema DB (no provider column, old watermark key)
 - Runs collect, verifies provider column added, old data migrated as `provider='claude'`, watermark key renamed
@@ -122,3 +124,8 @@ Test 13: Migration
 - ccusage daily JSON schema: `{ daily: [{ date, modelBreakdowns: [{ modelName, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, cost }] }] }`
 - ccusage blocks (`-n 1` for hourly) JSON schema: `{ blocks: [{ id, startTime (UTC ISO), endTime, actualEndTime, isActive, isGap, entries, tokenCounts: { inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens }, totalTokens, costUSD, models: [<name>...] }] }` — `models` is a name list only; no per-model token breakdown
 - @ccusage/codex JSON schema: `{ daily: [{ date, totalTokens, costUSD, models: { <name>: { inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens, isFallback } } }] }` — dates in "Jan 15, 2026" format
+
+  Field semantics, verified against real data (getting these wrong silently inflates stored tokens):
+  - `cachedInputTokens` ⊆ `inputTokens` — so uncached input is `inputTokens - cachedInputTokens`
+  - `reasoningOutputTokens` ⊆ `outputTokens` — **do not add it on top**; `totalTokens == inputTokens + outputTokens` holds exactly, with reasoning never counted separately
+  - No per-model cost field exists, which is why day cost is split by token ratio

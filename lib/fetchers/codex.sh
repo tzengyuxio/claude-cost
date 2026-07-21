@@ -45,7 +45,7 @@ fetch_codex() {
         | .value as $m
         | [$d, "codex", $model,
            (($m.inputTokens // 0) - ($m.cachedInputTokens // 0)),
-           (($m.outputTokens // 0) + ($m.reasoningOutputTokens // 0)),
+           ($m.outputTokens // 0),
            0,
            ($m.cachedInputTokens // 0),
            (if $day_total > 0 then $m.totalTokens * $day_cost / $day_total else 0 end)]
