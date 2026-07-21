@@ -3,12 +3,29 @@
 
 # fetch_codex <last_watermark> <yesterday>
 # Outputs TSV: date, provider, model, input, output, cache_creation, cache_read, cost
+# @ccusage/codex silently skips rollout files it cannot read (observed between
+# 202MB and 693MB, likely Node's max string length), exiting 0 with that
+# session's usage missing entirely. Warn so the gap shows up in the log instead
+# of being discovered later as an unexplained dip in the numbers.
+warn_oversized_rollouts() {
+    local sessions_dir="${CODEX_HOME:-$HOME/.codex}/sessions"
+    local limit="${CODEX_ROLLOUT_WARN_BYTES:-200000000}"
+    [[ -d "$sessions_dir" ]] || return 0
+
+    find "$sessions_dir" -type f -name '*.jsonl' -size +$((limit / 512)) 2>/dev/null \
+        | while read -r rollout; do
+            echo "WARN: rollout exceeds ${limit} bytes and may be silently skipped by @ccusage/codex: ${rollout}" >&2
+        done
+}
+
 fetch_codex() {
     local last="$1"
     local yesterday="$2"
     local tmpfile errfile
     tmpfile=$(mktemp)
     errfile=$(mktemp)
+
+    warn_oversized_rollouts
 
     local offline_flag=""
     if [[ "${CODEX_OFFLINE:-1}" == "1" ]]; then

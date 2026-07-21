@@ -23,7 +23,7 @@ Two entry points, one shared library, and a fetcher layer:
 - `bin/claude-cost-report` — Read-only queries against the DB. Subcommands: `daily`, `daily-total`, `weekly`, `monthly`, `by-hour`, `by-weekday-hour`, `summary`, `csv`. All formatted output goes through `render_table` (awk function that auto-detects numeric columns for right-alignment). The `summary` command includes a "Cost by Provider" breakdown. `daily-total` / `weekly` / `monthly` accept `--by-provider` to split rows per provider, and `--provider P` to filter to a single provider; `daily` is always per-model so only `--provider` applies. `by-hour` / `by-weekday-hour` query `hourly_usage` (currently claude-only) and re-project stored hours into `REPORT_TIMEZONE` at query time (a fixed-offset SQLite `datetime(...)` shift), labelling the display zone in the section header.
 - `lib/claude-cost-common.sh` — Config loading, path definitions (`DB`, `LOG`, `LOCK_DIR`), `yesterday()` portable date helper (computes "yesterday" under `TZ=$TIMEZONE`, so the watermark only advances past days fully elapsed in the bucketing zone — otherwise an early-morning run in a zone ahead of `TIMEZONE` drops the in-progress day's later hours), and `report_tz_shift_minutes()` (offset between `TIMEZONE` and `REPORT_TIMEZONE` for the hour-of-day reports). Defaults: `ENABLED_PROVIDERS="claude"`, `CODEX_OFFLINE=1`, `REPORT_TIMEZONE=$TIMEZONE`.
 - `lib/fetchers/claude.sh` — `fetch_claude()`: calls `npx ccusage@VERSION daily --json`, parses `modelBreakdowns[]`, outputs TSV rows. `fetch_claude_hourly()`: calls `npx ccusage@VERSION blocks --json -n 1` (online, no `--offline`, so ccusage looks up pricing and fills `costUSD` per block — matching daily; `--offline` would leave most hours at $0), converts UTC `startTime` to local date+hour via jq `strflocaltime` (with `TZ=$TIMEZONE`), filters `isGap`/`isActive` blocks, outputs TSV rows (no model column — `blocks` doesn't break tokens down per-model).
-- `lib/fetchers/codex.sh` — `fetch_codex()`: calls `npx -y @ccusage/codex@VERSION daily --json [--offline]`, parses `models{}` object, converts "Jan 15, 2026" dates to ISO format, distributes `costUSD` proportionally by token ratio. No hourly equivalent — `@ccusage/codex` has no `blocks` subcommand.
+- `lib/fetchers/codex.sh` — `fetch_codex()`: calls `npx -y @ccusage/codex@VERSION daily --json [--offline]`, parses `models{}` object, converts "Jan 15, 2026" dates to ISO format, distributes `costUSD` proportionally by token ratio. No hourly equivalent — `@ccusage/codex` has no `blocks` subcommand. Also runs `warn_oversized_rollouts()` first, which warns (to stderr, so it lands in the collect log) about any rollout `.jsonl` larger than `CODEX_ROLLOUT_WARN_BYTES` — see "Oversized rollout files" below.
 
 Data flow:
 ```
@@ -73,6 +73,7 @@ Key variables:
 | `CCUSAGE_CODEX_VERSION` | `18.0.10` | Pinned @ccusage/codex npm version |
 | `ENABLED_PROVIDERS` | `claude` | Space-separated list of active providers |
 | `CODEX_OFFLINE` | `1` | Pass `--offline` to codex fetcher |
+| `CODEX_ROLLOUT_WARN_BYTES` | `200000000` | Warn when a Codex rollout `.jsonl` exceeds this size (see "Oversized rollout files") |
 | `SCHEDULE_HOUR` | `2` | Collection start time — hour |
 | `SCHEDULE_MINUTE` | `0` | Collection start time — minute |
 | `SCHEDULE_INTERVAL_HOURS` | `6` | Re-run cadence: every N hours from `SCHEDULE_HOUR` (24 = once daily) |
@@ -115,6 +116,8 @@ Tests 9–12: hourly behaviour (claude only)
 
 Test 14: `reasoningOutputTokens` is not added on top of `outputTokens` (it is a subset)
 
+Test 15: Oversized rollout warning fires above `CODEX_ROLLOUT_WARN_BYTES` and stays silent below it
+
 Test 13: Migration
 - Creates old-schema DB (no provider column, old watermark key)
 - Runs collect, verifies provider column added, old data migrated as `provider='claude'`, watermark key renamed
@@ -129,3 +132,14 @@ Test 13: Migration
   - `cachedInputTokens` ⊆ `inputTokens` — so uncached input is `inputTokens - cachedInputTokens`
   - `reasoningOutputTokens` ⊆ `outputTokens` — **do not add it on top**; `totalTokens == inputTokens + outputTokens` holds exactly, with reasoning never counted separately
   - No per-model cost field exists, which is why day cost is split by token ratio
+
+### Oversized rollout files
+
+`@ccusage/codex` silently skips Codex rollout `.jsonl` files it cannot read: it exits 0, prints nothing to stderr, and simply omits that session's usage. The threshold sits between 202MB (reads fine) and 693MB (dropped), consistent with Node's max string length — it appears to read the whole file into a single string.
+
+A single long-running Codex session can cross this easily; one six-day session reached 750MB and vanished from reports entirely, making a day's cost read $0.06 instead of $38.53. Because collection is watermarked, the bad value is written once and never revisited.
+
+`warn_oversized_rollouts()` in `lib/fetchers/codex.sh` scans `${CODEX_HOME:-$HOME/.codex}/sessions` on every codex fetch and warns about files over `CODEX_ROLLOUT_WARN_BYTES` (default 200MB). It only warns — it never touches the files.
+
+To recover an affected session, split the rollout into chunks small enough to read. Each chunk needs the `session_meta` header line **and** the most recent preceding `turn_context` event prepended; `turn_context` carries the model name, and chunks missing it get their tokens misattributed to a default model (`gpt-5`) while daily totals still look correct. Verify a re-chunk per model, not just per day.
+

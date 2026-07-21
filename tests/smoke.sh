@@ -242,7 +242,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/14] Testing first collection (claude + codex)..."
+echo "[1/15] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -254,7 +254,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/14] Testing idempotent re-run..."
+echo "[2/15] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -265,7 +265,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/14] Testing report summary (claude total \$4.25)..."
+echo "[3/15] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -277,7 +277,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/14] Testing weekly report..."
+echo "[4/15] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -288,7 +288,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/14] Testing CSV export..."
+echo "[5/15] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -301,7 +301,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/14] Testing codex rows in DB..."
+echo "[6/15] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -311,7 +311,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/14] Testing codex cost allocation for Jan 16..."
+echo "[7/15] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -323,7 +323,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/14] Testing summary contains 'Cost by Provider'..."
+echo "[8/15] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -334,7 +334,7 @@ else
 fi
 
 # --- Test 9: Hourly rows inserted ---
-echo "[9/14] Testing hourly_usage rows (gap block filtered out)..."
+echo "[9/15] Testing hourly_usage rows (gap block filtered out)..."
 HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
 # Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
 if [ "$HOURLY_ROWS" -eq 3 ]; then
@@ -346,7 +346,7 @@ else
 fi
 
 # --- Test 10: Hourly watermark set ---
-echo "[10/14] Testing hourly watermark set to 2026-01-16..."
+echo "[10/15] Testing hourly watermark set to 2026-01-16..."
 HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
 if [ "$HOURLY_WM" = "2026-01-16" ]; then
     echo "  PASS: hourly watermark = $HOURLY_WM"
@@ -356,7 +356,7 @@ else
 fi
 
 # --- Test 11: by-hour report contains expected hour buckets ---
-echo "[11/14] Testing by-hour report shows hours 09 / 10 / 14..."
+echo "[11/15] Testing by-hour report shows hours 09 / 10 / 14..."
 BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
 if echo "$BY_HOUR" | grep -q '09:00' \
    && echo "$BY_HOUR" | grep -q '10:00' \
@@ -385,7 +385,7 @@ else
 fi
 
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
-echo "[12/14] Testing by-weekday-hour heatmap has 7 weekday rows..."
+echo "[12/15] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
 WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
 if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
@@ -410,7 +410,7 @@ else
 fi
 
 # --- Test 13: Migration from old schema ---
-echo "[13/14] Testing schema migration from old (no provider column) schema..."
+echo "[13/15] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -481,7 +481,7 @@ else
 fi
 
 # --- Test 14: Codex reasoning tokens are not double-counted ---
-echo "[14/14] Testing codex reasoning tokens are not double-counted..."
+echo "[14/15] Testing codex reasoning tokens are not double-counted..."
 # reasoningOutputTokens is a subset of outputTokens (totalTokens == inputTokens + outputTokens),
 # so it must not be added on top. Jan 15 gpt-test-model: output=100, reasoning=20 -> expect 100.
 CODEX_OUT=$(sqlite3 "$DB" "SELECT output_tokens FROM daily_usage WHERE provider='codex' AND date='2026-01-15' AND model='gpt-test-model';")
@@ -492,5 +492,37 @@ else
     exit 1
 fi
 
+# --- Test 15: Oversized rollout files are warned about ---
+echo "[15/15] Testing oversized rollout warning..."
+# @ccusage/codex silently skips rollout files it cannot read, returning exit 0
+# with that session's usage missing entirely. Warn so the gap is visible.
+mkdir -p "$HOME/.codex/sessions/2026/01/15"
+BIG_ROLLOUT="$HOME/.codex/sessions/2026/01/15/rollout-2026-01-15T00-00-00-deadbeef.jsonl"
+head -c 4096 /dev/zero > "$BIG_ROLLOUT"
+WARN_OUT=$(cd "$REPO_DIR" && CODEX_ROLLOUT_WARN_BYTES=1024 bash -c '
+    source lib/claude-cost-common.sh
+    source lib/fetchers/codex.sh
+    fetch_codex "" "2026-01-16" >/dev/null' 2>&1 || true)
+if echo "$WARN_OUT" | grep -q 'WARN.*rollout-2026-01-15T00-00-00-deadbeef.jsonl'; then
+    echo "  PASS: oversized rollout warning emitted"
+else
+    echo "  FAIL: expected WARN naming the oversized rollout, got: $WARN_OUT"
+    exit 1
+fi
+
+# A rollout under the threshold must stay silent (no false alarms).
+rm -f "$BIG_ROLLOUT"
+head -c 100 /dev/zero > "$BIG_ROLLOUT"
+QUIET_OUT=$(cd "$REPO_DIR" && CODEX_ROLLOUT_WARN_BYTES=1024 bash -c '
+    source lib/claude-cost-common.sh
+    source lib/fetchers/codex.sh
+    fetch_codex "" "2026-01-16" >/dev/null' 2>&1 || true)
+if echo "$QUIET_OUT" | grep -q 'WARN'; then
+    echo "  FAIL: warned about an under-threshold rollout: $QUIET_OUT"
+    exit 1
+else
+    echo "  PASS: no warning for under-threshold rollout"
+fi
+
 echo ""
-echo "=== All 14 tests passed ==="
+echo "=== All 15 tests passed ==="
