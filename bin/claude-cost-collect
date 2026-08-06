@@ -18,6 +18,10 @@ _FETCHERS_DIR="$SCRIPT_DIR/../lib/claude-cost/fetchers"
 . "$_FETCHERS_DIR/claude.sh"
 # shellcheck source=/dev/null
 . "$_FETCHERS_DIR/codex.sh"
+# shellcheck source=/dev/null
+. "$_FETCHERS_DIR/litellm.sh"
+# shellcheck source=/dev/null
+. "$_FETCHERS_DIR/openwebui.sh"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"

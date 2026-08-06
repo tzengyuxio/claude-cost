@@ -10,7 +10,9 @@ TIMEZONE="UTC"
 # Default: 18.0.10
 CCUSAGE_VERSION="18.0.10"
 
-# Enabled providers (space-separated). Currently supported: claude, codex
+# Enabled providers (space-separated).
+# Supported: claude, codex (this machine's CLI usage),
+#            litellm, openwebui (a self-hosted inference box's usage)
 # Default: claude
 ENABLED_PROVIDERS="claude"
 
@@ -21,6 +23,19 @@ CCUSAGE_CODEX_VERSION="18.0.10"
 # Use cached pricing data for Codex (1=offline, 0=fetch from LiteLLM)
 # Default: 1
 CODEX_OFFLINE=1
+
+# Warn when a Codex rollout .jsonl exceeds this size — @ccusage/codex silently
+# skips files it cannot read, so the day's cost is understated without notice.
+# Default: 200000000 (200MB)
+CODEX_ROLLOUT_WARN_BYTES=200000000
+
+# --- litellm provider: PostgreSQL SpendLogs, reached via docker exec ---
+LITELLM_DB_CONTAINER="litellm-db"
+LITELLM_DB_USER="litellm"
+LITELLM_DB_NAME="litellm"
+
+# --- openwebui provider: Open WebUI's SQLite database (read-only) ---
+OPENWEBUI_DB="/srv/data/webui/webui.db"
 
 # Scheduled collection start time (used by launchd/systemd)
 # Default: 02:00

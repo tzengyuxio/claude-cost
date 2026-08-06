@@ -242,7 +242,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/15] Testing first collection (claude + codex)..."
+echo "[1/17] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -254,7 +254,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/15] Testing idempotent re-run..."
+echo "[2/17] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -265,7 +265,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/15] Testing report summary (claude total \$4.25)..."
+echo "[3/17] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -277,7 +277,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/15] Testing weekly report..."
+echo "[4/17] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -288,7 +288,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/15] Testing CSV export..."
+echo "[5/17] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -301,7 +301,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/15] Testing codex rows in DB..."
+echo "[6/17] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -311,7 +311,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/15] Testing codex cost allocation for Jan 16..."
+echo "[7/17] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -323,7 +323,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/15] Testing summary contains 'Cost by Provider'..."
+echo "[8/17] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -334,7 +334,7 @@ else
 fi
 
 # --- Test 9: Hourly rows inserted ---
-echo "[9/15] Testing hourly_usage rows (gap block filtered out)..."
+echo "[9/17] Testing hourly_usage rows (gap block filtered out)..."
 HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
 # Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
 if [ "$HOURLY_ROWS" -eq 3 ]; then
@@ -346,7 +346,7 @@ else
 fi
 
 # --- Test 10: Hourly watermark set ---
-echo "[10/15] Testing hourly watermark set to 2026-01-16..."
+echo "[10/17] Testing hourly watermark set to 2026-01-16..."
 HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
 if [ "$HOURLY_WM" = "2026-01-16" ]; then
     echo "  PASS: hourly watermark = $HOURLY_WM"
@@ -356,7 +356,7 @@ else
 fi
 
 # --- Test 11: by-hour report contains expected hour buckets ---
-echo "[11/15] Testing by-hour report shows hours 09 / 10 / 14..."
+echo "[11/17] Testing by-hour report shows hours 09 / 10 / 14..."
 BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
 if echo "$BY_HOUR" | grep -q '09:00' \
    && echo "$BY_HOUR" | grep -q '10:00' \
@@ -385,7 +385,7 @@ else
 fi
 
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
-echo "[12/15] Testing by-weekday-hour heatmap has 7 weekday rows..."
+echo "[12/17] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
 WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
 if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
@@ -410,7 +410,7 @@ else
 fi
 
 # --- Test 13: Migration from old schema ---
-echo "[13/15] Testing schema migration from old (no provider column) schema..."
+echo "[13/17] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -481,7 +481,7 @@ else
 fi
 
 # --- Test 14: Codex reasoning tokens are not double-counted ---
-echo "[14/15] Testing codex reasoning tokens are not double-counted..."
+echo "[14/17] Testing codex reasoning tokens are not double-counted..."
 # reasoningOutputTokens is a subset of outputTokens (totalTokens == inputTokens + outputTokens),
 # so it must not be added on top. Jan 15 gpt-test-model: output=100, reasoning=20 -> expect 100.
 CODEX_OUT=$(sqlite3 "$DB" "SELECT output_tokens FROM daily_usage WHERE provider='codex' AND date='2026-01-15' AND model='gpt-test-model';")
@@ -493,7 +493,7 @@ else
 fi
 
 # --- Test 15: Oversized rollout files are warned about ---
-echo "[15/15] Testing oversized rollout warning..."
+echo "[15/17] Testing oversized rollout warning..."
 # @ccusage/codex silently skips rollout files it cannot read, returning exit 0
 # with that session's usage missing entirely. Warn so the gap is visible.
 mkdir -p "$HOME/.codex/sessions/2026/01/15"
@@ -524,5 +524,98 @@ else
     echo "  PASS: no warning for under-threshold rollout"
 fi
 
+# --- Tests 16-17: litellm + openwebui providers (isolated environment) ---
+echo "[16/17] Testing litellm + openwebui collection..."
+
+HIKARI_DIR="$TEST_DIR/hikari"
+export HOME="$HIKARI_DIR/home"
+export XDG_CONFIG_HOME="$HIKARI_DIR/config"
+mkdir -p "$HOME/.local/share/claude-cost/logs"
+mkdir -p "$XDG_CONFIG_HOME/claude-cost"
+
+WEBUI_DB="$HIKARI_DIR/webui.db"
+cat > "$XDG_CONFIG_HOME/claude-cost/config" <<EOF
+TIMEZONE="UTC"
+ENABLED_PROVIDERS="litellm openwebui"
+LITELLM_DB_CONTAINER="litellm-db"
+LITELLM_DB_USER="litellm"
+LITELLM_DB_NAME="litellm"
+OPENWEBUI_DB="$WEBUI_DB"
+EOF
+
+# Mock docker: stand in for `docker exec litellm-db psql ... -t -A -F<tab>`.
+# Includes a blank trailing line, as psql -t emits, to exercise the awk guard.
+cat > "$MOCK_BIN/docker" <<'MOCK'
+#!/bin/bash
+printf '2026-01-15\tqwen-tw\t100\t200\t0\n2026-01-16\tclaude-sonnet-5\t300\t400\t0\n\n'
+MOCK
+chmod +x "$MOCK_BIN/docker"
+
+# Open WebUI database: two assistant messages on Jan 15 for the same model
+# (must aggregate), one on Jan 16, plus a user row with no usage (must be ignored).
+sqlite3 "$WEBUI_DB" <<'SQL'
+CREATE TABLE chat_message (
+    id TEXT, chat_id TEXT, user_id TEXT, role TEXT, content TEXT,
+    model_id TEXT, usage TEXT, created_at INTEGER
+);
+INSERT INTO chat_message VALUES
+  ('m1','c1','u1','assistant','hi','qwen-unc:latest',
+   '{"input_tokens":120,"prompt_tokens":50,"output_tokens":30,"completion_tokens":10}',
+   strftime('%s','2026-01-15 12:00:00')),
+  ('m2','c1','u1','assistant','hi','qwen-unc:latest',
+   '{"input_tokens":70,"prompt_tokens":30,"output_tokens":15,"completion_tokens":5}',
+   strftime('%s','2026-01-15 18:00:00')),
+  ('m3','c2','u1','assistant','hi','qwen-tw',
+   '{"input_tokens":50,"prompt_tokens":20,"output_tokens":9,"completion_tokens":3}',
+   strftime('%s','2026-01-16 09:00:00')),
+  ('m4','c2','u1','user','ask',NULL,NULL,strftime('%s','2026-01-16 08:59:00'));
+SQL
+
+HIKARI_DB="$HOME/.local/share/claude-cost/usage.db"
+bash "$REPO_DIR/bin/claude-cost-collect"
+
+LITELLM_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='litellm';")
+OWUI_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='openwebui';")
+if [ "$LITELLM_ROWS" -eq 2 ] && [ "$OWUI_ROWS" -eq 2 ]; then
+    echo "  PASS: 2 litellm + 2 openwebui rows inserted"
+else
+    echo "  FAIL: Expected 2 litellm + 2 openwebui rows, got $LITELLM_ROWS + $OWUI_ROWS"
+    sqlite3 "$HIKARI_DB" "SELECT * FROM daily_usage;"
+    exit 1
+fi
+
+# prompt_tokens/completion_tokens (not input_tokens/output_tokens), aggregated
+# per day, with the `:latest` tag stripped from model_id.
+OWUI_JAN15=$(sqlite3 "$HIKARI_DB" "SELECT input_tokens || '/' || output_tokens FROM daily_usage WHERE provider='openwebui' AND date='2026-01-15' AND model='qwen-unc';")
+if [ "$OWUI_JAN15" = "80/15" ]; then
+    echo "  PASS: openwebui Jan 15 aggregates to 80/15 for model 'qwen-unc'"
+else
+    echo "  FAIL: Expected 80/15 for qwen-unc on Jan 15, got '$OWUI_JAN15'"
+    sqlite3 "$HIKARI_DB" "SELECT * FROM daily_usage WHERE provider='openwebui';"
+    exit 1
+fi
+
+# --- Test 17: idempotent re-run, watermarks advanced, report survives $0 cost ---
+echo "[17/17] Testing hikari providers re-run + watermarks + zero-cost report..."
+bash "$REPO_DIR/bin/claude-cost-collect"
+HIKARI_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage;")
+LITELLM_WM=$(sqlite3 "$HIKARI_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:litellm';")
+OWUI_WM=$(sqlite3 "$HIKARI_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:openwebui';")
+if [ "$HIKARI_ROWS" -eq 4 ] && [ "$LITELLM_WM" = "2026-01-16" ] && [ "$OWUI_WM" = "2026-01-16" ]; then
+    echo "  PASS: still 4 rows; both watermarks at 2026-01-16"
+else
+    echo "  FAIL: rows=$HIKARI_ROWS litellm_wm='$LITELLM_WM' openwebui_wm='$OWUI_WM'"
+    exit 1
+fi
+
+HIKARI_REPORT=$(bash "$REPO_DIR/bin/claude-cost-report" daily --last 9999 2>&1)
+if echo "$HIKARI_REPORT" | grep -q 'qwen-unc' && echo "$HIKARI_REPORT" | grep -q 'qwen-tw'; then
+    echo "  PASS: daily report renders with all costs at \$0"
+else
+    echo "  FAIL: daily report missing expected models"
+    echo "$HIKARI_REPORT"
+    exit 1
+fi
+
 echo ""
-echo "=== All 15 tests passed ==="
+echo "=== All 17 tests passed ==="
