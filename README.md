@@ -99,6 +99,46 @@ To collect only Claude Code usage (no Codex), set:
 ENABLED_PROVIDERS="claude"
 ```
 
+### Self-hosted inference providers
+
+Two extra providers track a self-hosted inference box instead of CLI usage. They are
+off by default and are meant for a separate installation on that machine, with its own
+`usage.db` — mixing them into a personal CLI database blurs what the numbers mean.
+
+```sh
+ENABLED_PROVIDERS="litellm openwebui"
+
+# litellm — reads LiteLLM_SpendLogs from PostgreSQL via `docker exec`
+LITELLM_DB_CONTAINER="litellm-db"
+LITELLM_DB_USER="litellm"
+LITELLM_DB_NAME="litellm"
+
+# openwebui — reads Open WebUI's SQLite database directly (read-only)
+OPENWEBUI_DB="/srv/data/webui/webui.db"
+```
+
+Both need only `sqlite3`, `jq` and (for `litellm`) `docker` — no Node, since neither
+calls `npx`. Local inference has no prompt cache and costs nothing directly, so
+`cache_*` and `cost_usd` are always `0` for these rows.
+
+### Cloud-equivalent cost
+
+Since self-hosted rows cost $0, the interesting number is what that traffic *would*
+have cost on a hosted API. Set a rate table and the reports gain a `cloud_eq` column
+next to `cost`, plus a `saved` figure in `summary`:
+
+```sh
+# <model-glob>:<input $/M>:<output $/M>, first match wins
+CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67"
+CLOUD_RATE_DEFAULT="0.07:0.67"
+```
+
+Rates are applied when the report runs, never stored, so revising one re-values the
+whole history at once. `cost_usd` keeps meaning real money, and rows from providers
+that genuinely are cloud services (`claude`, `codex`) use their actual cost as their
+equivalent — so the two remain comparable in a mixed database. Leave `CLOUD_RATES`
+unset and the extra columns never appear.
+
 After changing schedule settings, reload:
 
 ```bash
@@ -172,6 +212,8 @@ launchd / systemd timer (every SCHEDULE_INTERVAL_HOURS, e.g. 02/08/14/20)
     → for each provider in ENABLED_PROVIDERS:
         claude: npx ccusage@VERSION daily --json --timezone $TIMEZONE
         codex:  npx -y @ccusage/codex@VERSION daily --json [--offline]
+        litellm:   docker exec $LITELLM_DB_CONTAINER psql … LiteLLM_SpendLogs
+        openwebui: sqlite3 -readonly $OPENWEBUI_DB … chat_message
     → filters dates between per-provider watermark and yesterday
     → normalises to common TSV format (date, provider, model, tokens…, cost)
     → INSERT OR REPLACE into SQLite (single transaction per provider)

@@ -37,6 +37,19 @@ LITELLM_DB_NAME="litellm"
 # --- openwebui provider: Open WebUI's SQLite database (read-only) ---
 OPENWEBUI_DB="/srv/data/webui/webui.db"
 
+# --- Cloud-equivalent cost (reporting only) ---
+# Self-hosted rows store cost_usd = 0: local inference costs no money per token.
+# To answer "how much did self-hosting save", price those tokens at what the same
+# traffic would have cost on a hosted API. Applied when reports run, never stored,
+# so changing a rate re-values the whole history at once.
+# Format: <model-glob>:<input $/M>:<output $/M>, space-separated, first match wins.
+# Leave unset to keep the extra report columns off entirely.
+#CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67"
+#CLOUD_RATE_DEFAULT="0.07:0.67"
+# Providers whose cost_usd is structurally 0; everything else keeps its real cost
+# as its cloud-equivalent, since it already is a cloud service.
+#SELF_HOSTED_PROVIDERS="litellm openwebui"
+
 # Scheduled collection start time (used by launchd/systemd)
 # Default: 02:00
 SCHEDULE_HOUR=2

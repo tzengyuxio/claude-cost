@@ -45,7 +45,7 @@ render_table() {
         if (ralign == "auto") {
             for (i = 1; i <= cols; i++) {
                 h = tolower(data["1," i])
-                if (h ~ /(tok|token|cost|avg|pct|day|models|active|total|cache|rank)/) {
+                if (h ~ /(tok|token|cost|avg|pct|day|models|active|total|cache|rank|cloud_eq|saved)/) {
                     is_right[i] = 1
                 }
             }
@@ -133,6 +133,11 @@ Report options (daily / daily-total / weekly / monthly / by-hour / by-weekday-ho
 Other:
   --output F     CSV output file (default: stdout)
   --version      Show version
+
+Cloud-equivalent cost:
+  With CLOUD_RATES set in the config, reports gain a cloud_eq column: what the
+  tokens of a self-hosted provider would have cost on a hosted API. cost_usd
+  keeps meaning real money spent, so summary also shows what self-hosting saved.
 EOF
     exit 1
 }
@@ -187,6 +192,23 @@ provider_group_fragments() {
     fi
 }
 
+# Cloud-equivalent cost columns, added only when CLOUD_RATES is configured —
+# with no rates the figure would just duplicate cost_usd on every row.
+# Writes globals: EQ_ROW (append at the end of a SELECT list), EQ_SUM_T /
+# EQ_SAVED_T (insert mid-list, trailing comma), EQ_ORDER (ranking key),
+# EQ_BASIS (section-header note), EQ_CSV_COL (extra CSV column).
+EQ_ROW=""; EQ_SUM_T=""; EQ_SAVED_T=""; EQ_ORDER="SUM(cost_usd)"; EQ_BASIS=""
+EQ_CSV_COL=""
+if EQ_EXPR=$(cloud_equiv_expr); then
+    EQ_BASIS=" (ranked by cloud-equivalent cost)"
+    EQ_CSV_COL=", $EQ_EXPR AS cloud_equivalent_usd"
+    EQ_ROW=", printf('\$%.2f', $EQ_EXPR) AS cloud_eq"
+    EQ_SUM_T="printf('\$%.2f', SUM($EQ_EXPR)) AS cloud_eq,"
+    EQ_SAVED_T="printf('\$%.2f', SUM($EQ_EXPR) - SUM(cost_usd)) AS saved,"
+    # Ranking by real cost is meaningless when every self-hosted row is $0.
+    EQ_ORDER="SUM($EQ_EXPR)"
+fi
+
 # --- Subcommands ---
 
 cmd_daily() {
@@ -209,7 +231,7 @@ SELECT
     printf('%,d', output_tokens) AS output_tok,
     printf('%,d', cache_creation_tokens) AS cache_create,
     printf('%,d', cache_read_tokens) AS cache_read,
-    printf('\$%.2f', cost_usd) AS cost
+    printf('\$%.2f', cost_usd) AS cost${EQ_ROW}
 FROM daily_usage
 WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
 ${prov_clause}
@@ -233,6 +255,7 @@ SELECT
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    ${EQ_SUM_T}
     COUNT(DISTINCT model) AS models
 FROM daily_usage
 WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
@@ -258,6 +281,7 @@ SELECT
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    ${EQ_SUM_T}
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM daily_usage
@@ -292,6 +316,7 @@ SELECT
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    ${EQ_SUM_T}
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM base
@@ -305,6 +330,8 @@ cmd_summary() {
     query_table "
 SELECT
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
+    ${EQ_SUM_T}
+    ${EQ_SAVED_T}
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily,
     printf('\$%.2f', SUM(cost_usd) / MAX(1, (julianday(MAX(date)) - julianday(MIN(date))) / 30.0)) AS avg_monthly,
     COUNT(DISTINCT date) AS active_days,
@@ -313,39 +340,41 @@ SELECT
 FROM daily_usage;
 "
 
-    section "Most / Least Expensive Days"
+    section "Most / Least Expensive Days${EQ_BASIS}"
     query_table "
 SELECT '▲ max' AS rank, date, printf('\$%.2f', total) AS cost FROM (
-    SELECT date, SUM(cost_usd) AS total FROM daily_usage GROUP BY date ORDER BY total DESC LIMIT 1
+    SELECT date, ${EQ_ORDER} AS total FROM daily_usage GROUP BY date ORDER BY total DESC LIMIT 1
 )
 UNION ALL
 SELECT '▼ min', date, printf('\$%.2f', total) FROM (
-    SELECT date, SUM(cost_usd) AS total FROM daily_usage GROUP BY date ORDER BY total ASC LIMIT 1
+    SELECT date, ${EQ_ORDER} AS total FROM daily_usage GROUP BY date ORDER BY total ASC LIMIT 1
 );
 "
 
-    section "Cost by Model"
+    section "Cost by Model${EQ_BASIS}"
     query_table "
 SELECT
     model,
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    printf('%.1f%%', SUM(cost_usd) * 100.0 / (SELECT SUM(cost_usd) FROM daily_usage)) AS pct,
+    ${EQ_SUM_T}
+    printf('%.1f%%', ${EQ_ORDER} * 100.0 / NULLIF((SELECT ${EQ_ORDER} FROM daily_usage), 0)) AS pct,
     COUNT(DISTINCT date) AS days_used
 FROM daily_usage
 GROUP BY model
-ORDER BY SUM(cost_usd) DESC;
+ORDER BY ${EQ_ORDER} DESC;
 "
 
-    section "Cost by Provider"
+    section "Cost by Provider${EQ_BASIS}"
     query_table "
 SELECT
     provider,
     printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    printf('%.1f%%', SUM(cost_usd) * 100.0 / (SELECT SUM(cost_usd) FROM daily_usage)) AS pct,
+    ${EQ_SUM_T}
+    printf('%.1f%%', ${EQ_ORDER} * 100.0 / NULLIF((SELECT ${EQ_ORDER} FROM daily_usage), 0)) AS pct,
     COUNT(DISTINCT date) AS days_used
 FROM daily_usage
 GROUP BY provider
-ORDER BY SUM(cost_usd) DESC;
+ORDER BY ${EQ_ORDER} DESC;
 "
 }
 
@@ -482,7 +511,7 @@ cmd_csv() {
         esac
     done
 
-    local query="SELECT date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM daily_usage ORDER BY date, provider, model;"
+    local query="SELECT date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd${EQ_CSV_COL} FROM daily_usage ORDER BY date, provider, model;"
 
     if [ -n "$output" ]; then
         sqlite3 -header -csv "$DB" "$query" > "$output"

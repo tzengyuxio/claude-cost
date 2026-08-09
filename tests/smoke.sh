@@ -242,7 +242,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/17] Testing first collection (claude + codex)..."
+echo "[1/18] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -254,7 +254,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/17] Testing idempotent re-run..."
+echo "[2/18] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -265,7 +265,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/17] Testing report summary (claude total \$4.25)..."
+echo "[3/18] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -277,7 +277,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/17] Testing weekly report..."
+echo "[4/18] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -288,7 +288,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/17] Testing CSV export..."
+echo "[5/18] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -301,7 +301,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/17] Testing codex rows in DB..."
+echo "[6/18] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -311,7 +311,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/17] Testing codex cost allocation for Jan 16..."
+echo "[7/18] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -323,7 +323,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/17] Testing summary contains 'Cost by Provider'..."
+echo "[8/18] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -334,7 +334,7 @@ else
 fi
 
 # --- Test 9: Hourly rows inserted ---
-echo "[9/17] Testing hourly_usage rows (gap block filtered out)..."
+echo "[9/18] Testing hourly_usage rows (gap block filtered out)..."
 HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
 # Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
 if [ "$HOURLY_ROWS" -eq 3 ]; then
@@ -346,7 +346,7 @@ else
 fi
 
 # --- Test 10: Hourly watermark set ---
-echo "[10/17] Testing hourly watermark set to 2026-01-16..."
+echo "[10/18] Testing hourly watermark set to 2026-01-16..."
 HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
 if [ "$HOURLY_WM" = "2026-01-16" ]; then
     echo "  PASS: hourly watermark = $HOURLY_WM"
@@ -356,7 +356,7 @@ else
 fi
 
 # --- Test 11: by-hour report contains expected hour buckets ---
-echo "[11/17] Testing by-hour report shows hours 09 / 10 / 14..."
+echo "[11/18] Testing by-hour report shows hours 09 / 10 / 14..."
 BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
 if echo "$BY_HOUR" | grep -q '09:00' \
    && echo "$BY_HOUR" | grep -q '10:00' \
@@ -385,7 +385,7 @@ else
 fi
 
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
-echo "[12/17] Testing by-weekday-hour heatmap has 7 weekday rows..."
+echo "[12/18] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
 WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
 if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
@@ -410,7 +410,7 @@ else
 fi
 
 # --- Test 13: Migration from old schema ---
-echo "[13/17] Testing schema migration from old (no provider column) schema..."
+echo "[13/18] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -481,7 +481,7 @@ else
 fi
 
 # --- Test 14: Codex reasoning tokens are not double-counted ---
-echo "[14/17] Testing codex reasoning tokens are not double-counted..."
+echo "[14/18] Testing codex reasoning tokens are not double-counted..."
 # reasoningOutputTokens is a subset of outputTokens (totalTokens == inputTokens + outputTokens),
 # so it must not be added on top. Jan 15 gpt-test-model: output=100, reasoning=20 -> expect 100.
 CODEX_OUT=$(sqlite3 "$DB" "SELECT output_tokens FROM daily_usage WHERE provider='codex' AND date='2026-01-15' AND model='gpt-test-model';")
@@ -493,7 +493,7 @@ else
 fi
 
 # --- Test 15: Oversized rollout files are warned about ---
-echo "[15/17] Testing oversized rollout warning..."
+echo "[15/18] Testing oversized rollout warning..."
 # @ccusage/codex silently skips rollout files it cannot read, returning exit 0
 # with that session's usage missing entirely. Warn so the gap is visible.
 mkdir -p "$HOME/.codex/sessions/2026/01/15"
@@ -525,7 +525,7 @@ else
 fi
 
 # --- Tests 16-17: litellm + openwebui providers (isolated environment) ---
-echo "[16/17] Testing litellm + openwebui collection..."
+echo "[16/18] Testing litellm + openwebui collection..."
 
 HIKARI_DIR="$TEST_DIR/hikari"
 export HOME="$HIKARI_DIR/home"
@@ -547,7 +547,7 @@ EOF
 # Includes a blank trailing line, as psql -t emits, to exercise the awk guard.
 cat > "$MOCK_BIN/docker" <<'MOCK'
 #!/bin/bash
-printf '2026-01-15\tqwen-tw\t100\t200\t0\n2026-01-16\tclaude-sonnet-5\t300\t400\t0\n\n'
+printf '2026-01-15\tqwen-tw\t100\t200\n2026-01-16\tclaude-sonnet-5\t300\t400\n\n'
 MOCK
 chmod +x "$MOCK_BIN/docker"
 
@@ -596,7 +596,7 @@ else
 fi
 
 # --- Test 17: idempotent re-run, watermarks advanced, report survives $0 cost ---
-echo "[17/17] Testing hikari providers re-run + watermarks + zero-cost report..."
+echo "[17/18] Testing hikari providers re-run + watermarks + zero-cost report..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 HIKARI_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage;")
 LITELLM_WM=$(sqlite3 "$HIKARI_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:litellm';")
@@ -605,6 +605,16 @@ if [ "$HIKARI_ROWS" -eq 4 ] && [ "$LITELLM_WM" = "2026-01-16" ] && [ "$OWUI_WM" 
     echo "  PASS: still 4 rows; both watermarks at 2026-01-16"
 else
     echo "  FAIL: rows=$HIKARI_ROWS litellm_wm='$LITELLM_WM' openwebui_wm='$OWUI_WM'"
+    exit 1
+fi
+
+# LiteLLM's `spend` is a cloud-equivalent figure, not money spent, so it must
+# never reach cost_usd — every self-hosted row stays at 0.
+HIKARI_COST=$(sqlite3 "$HIKARI_DB" "SELECT COALESCE(SUM(cost_usd), 0) FROM daily_usage;")
+if [ "$HIKARI_COST" = "0" ] || [ "$HIKARI_COST" = "0.0" ]; then
+    echo "  PASS: all self-hosted rows have cost_usd = 0"
+else
+    echo "  FAIL: expected cost_usd sum 0, got $HIKARI_COST"
     exit 1
 fi
 
@@ -617,5 +627,68 @@ else
     exit 1
 fi
 
+# --- Test 18: cloud-equivalent cost is reported without touching cost_usd ---
+echo "[18/18] Testing cloud-equivalent cost reporting..."
+
+# Rates are $/M tokens. litellm 2026-01-16 claude-sonnet-5: 300 in / 400 out.
+#   claude-* → 1.00/5.00  =>  300*1.00/1e6 + 400*5.00/1e6 = 0.0023
+# openwebui 2026-01-15 qwen-unc: 80 in / 15 out.
+#   qwen*    → 0.07/0.67  =>  80*0.07/1e6 + 15*0.67/1e6   = 0.0000156
+EQ_ROW_COST=$(CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67" \
+    sqlite3 "$HIKARI_DB" "SELECT ROUND(SUM(input_tokens * 1.00 + output_tokens * 5.00) / 1000000.0, 6) FROM daily_usage WHERE model='claude-sonnet-5';")
+
+EQ_REPORT=$(CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67" CLOUD_RATE_DEFAULT="0.07:0.67" \
+    bash "$REPO_DIR/bin/claude-cost-report" daily --last 9999 2>&1)
+if echo "$EQ_REPORT" | grep -q 'cloud_eq' && echo "$EQ_REPORT" | grep -q '\$0.00 *\$0.00'; then
+    echo "  PASS: daily gained a cloud_eq column alongside cost (expected row eq=$EQ_ROW_COST)"
+else
+    echo "  FAIL: daily missing cloud_eq column"
+    echo "$EQ_REPORT"
+    exit 1
+fi
+
+# The headline number: summary must show a non-zero equivalent and the savings,
+# while real spend stays $0.
+EQ_SUMMARY=$(CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67" CLOUD_RATE_DEFAULT="0.07:0.67" \
+    bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
+if echo "$EQ_SUMMARY" | grep -q 'cloud_eq' \
+   && echo "$EQ_SUMMARY" | grep -q 'saved' \
+   && echo "$EQ_SUMMARY" | grep -qE '\$0\.0[0-9]'; then
+    echo "  PASS: summary reports cloud_eq + saved"
+else
+    echo "  FAIL: summary missing cloud-equivalent columns"
+    echo "$EQ_SUMMARY"
+    exit 1
+fi
+
+# cost_usd itself must be untouched — the equivalent figure is report-only.
+EQ_STORED=$(sqlite3 "$HIKARI_DB" "SELECT COALESCE(SUM(cost_usd), 0) FROM daily_usage;")
+if [ "$EQ_STORED" = "0" ] || [ "$EQ_STORED" = "0.0" ]; then
+    echo "  PASS: stored cost_usd still 0 (equivalent cost is not persisted)"
+else
+    echo "  FAIL: cost_usd was modified: $EQ_STORED"
+    exit 1
+fi
+
+# With no rates configured — the Mac case — reports must be byte-identical to before.
+PLAIN_BEFORE=$(bash "$REPO_DIR/bin/claude-cost-report" daily --last 9999 2>&1)
+if echo "$PLAIN_BEFORE" | grep -q 'cloud_eq'; then
+    echo "  FAIL: cloud_eq column appeared without CLOUD_RATES set"
+    echo "$PLAIN_BEFORE"
+    exit 1
+else
+    echo "  PASS: no cloud_eq column when CLOUD_RATES is unset"
+fi
+
+# A malformed rate entry must warn and be skipped, not break the SQL.
+BAD_OUT=$(CLOUD_RATES="qwen*:abc:0.67" bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
+if echo "$BAD_OUT" | grep -q "WARN: ignoring malformed CLOUD_RATES" && echo "$BAD_OUT" | grep -q 'Overview'; then
+    echo "  PASS: malformed rate warns and the report still renders"
+else
+    echo "  FAIL: malformed rate handling"
+    echo "$BAD_OUT"
+    exit 1
+fi
+
 echo ""
-echo "=== All 17 tests passed ==="
+echo "=== All 18 tests passed ==="
