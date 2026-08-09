@@ -3,8 +3,14 @@
 #
 # Data source is the `LiteLLM_SpendLogs` table in the litellm-db container. The
 # host has no psql, so queries go through `docker exec`. Local inference has no
-# prompt-cache concept and LiteLLM is configured with zero per-token costs
-# (raising them would break its budget accounting), so cache_* and cost are 0.
+# prompt-cache concept, so cache_* is 0.
+#
+# cost is 0 too, deliberately. LiteLLM's `spend` column is NOT money spent: since
+# 2026-08-06 its config prices tokens at what the same traffic would have cost
+# against a hosted API (rows before that date are 0, as LiteLLM computes spend at
+# write time and never backfills). `cost_usd` means real money in this schema, so
+# a cloud-equivalent figure cannot share the column without making both meanings
+# unreadable — it needs a column of its own before it can be collected.
 
 # fetch_litellm <last_watermark> <yesterday>
 # Outputs TSV: date, provider, model, input, output, cache_creation, cache_read, cost
@@ -25,8 +31,7 @@ fetch_litellm() {
     sql="SELECT to_char(${date_expr}, 'YYYY-MM-DD') AS d,
                 COALESCE(NULLIF(model_group, ''), model) AS m,
                 SUM(prompt_tokens)::bigint,
-                SUM(completion_tokens)::bigint,
-                COALESCE(SUM(spend), 0)
+                SUM(completion_tokens)::bigint
          FROM \"LiteLLM_SpendLogs\"
          WHERE total_tokens > 0
            AND ${date_expr} <= DATE '${yesterday}'"
@@ -45,8 +50,8 @@ fetch_litellm() {
     fi
     rm -f "$errfile"
 
-    awk -F'\t' 'NF >= 5 && $1 != "" && $2 != "" {
-        printf "%s\tlitellm\t%s\t%s\t%s\t0\t0\t%s\n", $1, $2, $3, $4, $5
+    awk -F'\t' 'NF >= 4 && $1 != "" && $2 != "" {
+        printf "%s\tlitellm\t%s\t%s\t%s\t0\t0\t0\n", $1, $2, $3, $4
     }' "$tmpfile"
     rm -f "$tmpfile"
 }
