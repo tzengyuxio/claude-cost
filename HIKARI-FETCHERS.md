@@ -4,6 +4,23 @@
 
 撰寫於 2026-08-06。所有 SQL 與路徑都已在實機驗證過，輸出貼在下方。
 
+## 實作狀態（2026-08-10：已部署到 hikari，驗收通過）
+
+`~/lab/claude-cost` 已 clone 並套上 Mac 端尚未 commit 的修改，`make install` 裝好 `~/.local/bin` 與 systemd user timer（`OnCalendar=*-*-* 2/6:0:00`）。驗收四項全過，細節見下方「驗收」。
+
+**唯一未完成的一件事：`loginctl show-user yuxio -p Linger` 是 `no`**，代表 yuxio 一登出 user systemd manager 就結束，timer 不會在無人登入時觸發。要修得跑（需要密碼，我沒有）：
+
+```bash
+sudo loginctl enable-linger yuxio
+```
+
+在那之前，排程只有在你有 session 時才有效。
+
+與規格的兩處差異：
+
+- 唯讀開啟用 `sqlite3 -readonly "$OPENWEBUI_DB"`，不是 `file:…?mode=ro` URI——效果相同，但不依賴 sqlite3 CLI 是否啟用 URI filename。
+- 時區位移沿用 `lib/claude-cost-common.sh` 既有的 `tz_offset_minutes`，把 `TIMEZONE` 換算成分鐘後餵給 SQLite 的 `date(...,'N minutes')`，不用 `'localtime'`。因此系統時區是 UTC、`TIMEZONE="Asia/Taipei"` 的情況已經處理掉了。
+
 ## 背景：那台機器長什麼樣
 
 hikari 是 Ubuntu 24.04 + RTX 5090 + RTX 3060，跑 Ollama、Open WebUI、ComfyUI、LiteLLM。使用者從兩條路徑進來：
@@ -113,7 +130,9 @@ docker exec "$LITELLM_DB_CONTAINER" psql -U "$LITELLM_DB_USER" -d "$LITELLM_DB_N
 
 - **`WHERE total_tokens > 0` 不能省。** 實測 39 筆裡有 **19 筆是零 token** 的失敗請求（被 rate limit 擋掉的、`model` 欄位是空字串的）。不濾掉的話請求數會虛高一倍，還會產生 model 為空的垃圾列。
 - **用 `model_group` 而不是 `model`。** `model` 存的是後端實際名稱（`ollama_chat/qwen-tw:latest`），`model_group` 是對外的名字（`qwen-tw`）。用 `COALESCE(NULLIF(model_group,''), model)` 兜底。
-- **`spend` 永遠是 0**，因為 `litellm-config.yaml` 把 `input_cost_per_token` 設成 0。**不要為了讓報表好看去改那個值**——價格非 0 會讓 LiteLLM 的 budget 機制全部失準（那份 config 的註解有寫）。雲端等價成本要離線另算，見下方「成本」。
+- **`spend` 自 2026-08-06 起是「雲端等價成本」，不是真實花費。** 早期版本把價格設為 0，`spend` 因此全是 0；現在按「這些 token 在雲端要花多少」分層計價：`claude-*` 別名用 Claude Haiku 4.5 費率（$1/M in、$5/M out），`qwen` / `qwen-tw` 用代管 qwen3.6-35b-a3b 的市場最低價 × 0.7（$0.07 / $0.67 per M；0.7 反映本機跑 Q4_K_M 而代管是 FP8）。
+- **舊資料的 `spend` 仍是 0** —— LiteLLM 在寫入時計算，改設定不回填。2026-08-06 之前的列要靠 token 數自行換算，之後的直接讀 `spend` 即可。fetcher 要能同時處理兩段。
+- **真實花費是電費**（NT$10–46/天，見 hikari 的 `docs/risks-and-cost.md`），與 `spend` 完全無關。Mac 那份 claude-cost 的 `cost_usd` 是真錢，兩者語意不同，**不要混進同一個欄位**。
 - `startTime` 是 UTC 的 `timestamp without time zone`，所以要 `AT TIME ZONE 'UTC' AT TIME ZONE '<TIMEZONE>'` 兩段轉換，不能只寫一段。
 - 表名有大寫，SQL 裡**必須用雙引號** `"LiteLLM_SpendLogs"`。在 shell 裡包 SQL 時注意跳脫。
 - watermark 用 `AND d > '<last>'` 過濾，`bin/claude-cost-collect` 已經 per-provider 存 watermark，照既有模式即可。
@@ -152,7 +171,7 @@ sqlite3 "file:${OPENWEBUI_DB}?mode=ro" -separator $'\t' "$sql"
 
 `'localtime'` 會用系統時區。若 `TIMEZONE` 與系統時區不同，要改用 `datetime(created_at,'unixepoch')` 取回 UTC 後自行位移，否則日期分組會跟 litellm fetcher 對不齊。hikari 的系統時區是 UTC，而建議的 `TIMEZONE="Asia/Taipei"`，**所以這裡預設就是不一致的，必須處理**。
 
-### ⚠️ 未解：兩組 token 數字要用哪一組
+### ⚠️ 部分未解：兩組 token 數字要用哪一組
 
 `usage` 裡同時有兩組，數值差很多。實測三筆：
 
@@ -168,9 +187,12 @@ sqlite3 "file:${OPENWEBUI_DB}?mode=ro" -separator $'\t' "$sql"
 
 但這是推論不是實證。要確定的話，拿一次已知的對話去對照 Ollama 的 `eval_count` / `prompt_eval_count`（`docker logs ollama` 或直接打 `/api/generate` 比對）。**做完把結論寫回這一節。**
 
+**實作結論（2026-08-06）**：照建議採用 `prompt_tokens` / `completion_tokens`，理由就是上面的跨 provider 對齊；smoke test 16 用一筆兩組數字都塞的 mock 資料釘住這個選擇（`input_tokens` 明顯較大，斷言只會在取到 `prompt_tokens` 時通過）。**與 Ollama 的實測比對還沒做**，這一節在做完之前不算結案。
+
 ### 其他注意事項
 
 - `model_id` 存的是 Ollama 的原始名稱（例如 `qwen-unc:latest`），與 litellm fetcher 的 `qwen-tw` 命名體系不同。要不要正規化（去掉 `:latest`）自行決定，但**兩邊要一致**，否則報表會出現 `qwen-tw` 和 `qwen-tw:latest` 兩列。
+  → **已實作**：openwebui fetcher 在輸出前砍掉結尾的 `:latest`；litellm 那邊的 `model_group` 本來就沒有 tag，不用動。
 - 這條路徑的用量**只有 yuxio 自己**（家人走 API），所以不需要 per-user 拆分；但 `user_id` 欄位存在，日後要拆也拆得出來。
 - Open WebUI 生圖也走這張表（`files` 欄位有圖片、`model_id` 是 LLM），**但生圖本身沒有 token 計數**，不會污染統計。
 
@@ -182,7 +204,22 @@ sqlite3 "file:${OPENWEBUI_DB}?mode=ro" -separator $'\t' "$sql"
 
 若要做「雲端等價成本」（用同樣的 token 數換算成呼叫雲端 API 要花多少），**不要寫進 `cost_usd`**——那個欄位在 Mac 那份是真實花費，語意混在一起後兩邊的報表都會失去意義。建議另外加 `cloud_equivalent_cost` 欄位，費率放 config，離線乘算。
 
-參考值（hikari 那邊的 `docs/risks-and-cost.md` 有記）：開源模型代管約 $0.20/M input、$0.60/M output；前沿模型（Sonnet 級）約 $3/M input、$15/M output。**這兩個費率是假設值，換算時要重新確認。**
+**實作結論（2026-08-10）**：費率放 config（`CLOUD_RATES` / `CLOUD_RATE_DEFAULT`），但**沒有加欄位，改在報表層即時換算**。理由是費率會改、估算會修正，存下來等於把每一列凍結在收集當天的費率——正是 LiteLLM `spend` 現在的毛病（08-06 之前全 0，改了設定也不回填）。報表層算則改一次費率整段歷史一致重算，也省掉 migration 與 TSV 擴欄。
+
+另外，`spend` 整個不讀。openwebui 那半邊本來就沒有成本資料、litellm 08-06 之前也是 0，無論如何都得有費率表自己乘；既然要乘，就統一由 claude-cost 這邊算，免得費率同時散在 `litellm-config.yaml` 和 config 兩處。
+
+hikari 上實測（08-04..08-09 六天）：真實花費 $0.00、雲端等價 **$0.87**，其中 `claude-fable-5` 單日 400K/69.5K token 就佔 $0.75（86.5%）。
+
+實際採用的費率（2026-08-06 查證，已寫進 `litellm-config.yaml`）：
+
+| 入口 | 對標 | Input $/M | Output $/M |
+|---|---|---|---|
+| `claude-*` | Claude Haiku 4.5 | 1.00 | 5.00 |
+| `qwen` / `qwen-tw` | 代管 qwen3.6-35b-a3b 市場最低價 × 0.7 | 0.07 | 0.67 |
+
+**為什麼是 Haiku 而不是 Sonnet**：`claude-*` 承接的是 Claude Code 的工作，但背後是 3B-active 的 MoE 加 Q4_K_M 量化——單檔網頁寫得乾淨，但在 Claude Code 的 agent 迴圈裡失控生成過 57,000 token。按 Sonnet 計價會把「省下多少」誇大三倍。
+
+**為什麼 × 0.7**：代管商跑 FP8（DeepInfra 明講），本機是 Q4_K_M（約 4.5 bits/weight）。perplexity 差距只有幾個百分點，但多步推理落差更大，0.7 是保守的中間值——**這是判斷不是實測**，要改就改，但改了要在這裡註明。
 
 ## 部署
 
@@ -210,6 +247,18 @@ cp ~/lab/claude-cost/claude-cost.conf.example ~/.config/claude-cost/config
 2. **重跑一次，列數不變**（`INSERT OR REPLACE` 冪等，既有機制已保證，但要實測確認 watermark 有正確前進）
 3. `claude-cost-report` 的日／週／月報表能正常輸出，不會因為 `cost_usd` 全為 0 而崩潰或顯示空白
 4. 手動比對一天的數字：LiteLLM 那半邊對照 admin UI（<https://hikari.tail81eb54.ts.net:4000/ui/>，登入 `admin` + master key）看得到的用量
+
+### 驗收結果（2026-08-10）
+
+1. ✅ 首次收集 exit 0，`daily_usage` 有 litellm 8 列（08-05..08-09）+ openwebui 5 列（08-04..08-07）
+2. ✅ 重跑列數不變（13 → 13），watermark 為 `litellm=2026-08-09` / `openwebui=2026-08-07`（＝各自最後有資料的日期，不是 yesterday）
+3. ✅ daily／weekly／monthly／summary 都正常輸出，成本全 $0 不影響排版
+4. ✅ 改用 `LiteLLM_DailyUserSpend` 對帳（admin UI 讀的就是這張彙總表，且與 `LiteLLM_SpendLogs` 是不同來源，比對才有意義）：
+   - qwen-tw 後端合計 **415,441 / 129,866**，與收集到的完全相同；`qwen` 後端 60/10,096 也相同
+   - 逐日差異全部是 UTC vs Asia/Taipei 的分桶位移，而且對得起來：該表 UTC 08-06 是 401,637/79,205，我們 Taipei 08-06 是 404,012/86,583，差額 2,375/7,378 正好是 UTC 08-05 16:00 之後的那批
+   - openwebui 同樣核對：來源總計 408,344/42,323 與收集到的一致；UTC 08-04 的 qwen-tw 150,530/27,024 被正確拆成 Taipei 08-04 49,036/12,698 + 08-05 101,494/14,326
+
+額外驗證：把 litellm 的資料與 watermark 清掉後改用 `systemctl --user start claude-cost-collect.service` 重跑，8 列如常寫回——確認 systemd user service 裡也拿得到 docker（fetcher 依賴 yuxio 的 docker 群組，這在 user manager 下不一定成立，所以實測而非假設）。
 
 ## 相關文件
 
