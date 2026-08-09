@@ -35,6 +35,8 @@ install: ## Install claude-cost scripts and schedule
 	install -m 644 lib/claude-cost-common.sh $(LIBDIR)/
 	install -m 644 lib/fetchers/claude.sh $(LIBDIR)/fetchers/
 	install -m 644 lib/fetchers/codex.sh $(LIBDIR)/fetchers/
+	install -m 644 lib/fetchers/litellm.sh $(LIBDIR)/fetchers/
+	install -m 644 lib/fetchers/openwebui.sh $(LIBDIR)/fetchers/
 	@# Config (never overwrite existing)
 	@mkdir -p $(CONFDIR)
 	@if [ ! -f "$(CONFDIR)/config" ]; then \
@@ -109,7 +111,7 @@ else
 endif
 
 lint: ## Run shellcheck on all scripts
-	shellcheck --severity=warning bin/claude-cost-collect bin/claude-cost-report lib/claude-cost-common.sh lib/fetchers/claude.sh lib/fetchers/codex.sh
+	shellcheck --severity=warning bin/claude-cost-collect bin/claude-cost-report lib/claude-cost-common.sh lib/fetchers/*.sh
 
 test: ## Run smoke tests
 	bash tests/smoke.sh
