@@ -639,12 +639,26 @@ EQ_ROW_COST=$(CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67" \
 
 EQ_REPORT=$(CLOUD_RATES="claude-*:1.00:5.00 qwen*:0.07:0.67" CLOUD_RATE_DEFAULT="0.07:0.67" \
     bash "$REPO_DIR/bin/claude-cost-report" daily --last 9999 2>&1)
-if echo "$EQ_REPORT" | grep -q 'cloud_eq' && echo "$EQ_REPORT" | grep -q '\$0.00 *\$0.00'; then
-    echo "  PASS: daily gained a cloud_eq column alongside cost (expected row eq=$EQ_ROW_COST)"
+# The cost column carries the equivalent, marked, instead of a second column.
+if echo "$EQ_REPORT" | grep -q '(eq.)' && ! echo "$EQ_REPORT" | grep -q 'cloud_eq'; then
+    echo "  PASS: daily folds the equivalent into cost, marked (eq.) (row eq=$EQ_ROW_COST)"
 else
-    echo "  FAIL: daily missing cloud_eq column"
+    echo "  FAIL: daily should show a marked cost column and no separate cloud_eq"
     echo "$EQ_REPORT"
     exit 1
+fi
+
+# A genuinely $0 cloud row must stay unmarked — zero is not the same as unknown.
+# The claude/codex rows in the main DB are real costs, so none may gain "(eq.)".
+CLOUD_ONLY=$(HOME="$TEST_DIR/home" XDG_CONFIG_HOME="$TEST_DIR/config" \
+    CLOUD_RATES="claude-*:1.00:5.00" CLOUD_RATE_DEFAULT="0.07:0.67" \
+    bash "$REPO_DIR/bin/claude-cost-report" daily --last 9999 --provider claude 2>&1)
+if echo "$CLOUD_ONLY" | grep -q '(eq.)'; then
+    echo "  FAIL: real cloud-provider costs were marked as estimates"
+    echo "$CLOUD_ONLY"
+    exit 1
+else
+    echo "  PASS: cloud-provider rows keep their real cost unmarked"
 fi
 
 # The headline number: summary must show a non-zero equivalent and the savings,

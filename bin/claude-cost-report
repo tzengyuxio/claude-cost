@@ -135,9 +135,10 @@ Other:
   --version      Show version
 
 Cloud-equivalent cost:
-  With CLOUD_RATES set in the config, reports gain a cloud_eq column: what the
-  tokens of a self-hosted provider would have cost on a hosted API. cost_usd
-  keeps meaning real money spent, so summary also shows what self-hosting saved.
+  With CLOUD_RATES set in the config, the cost column of a self-hosted provider
+  shows what those tokens would have cost on a hosted API, marked "(eq.)".
+  Unmarked figures are real money. summary keeps the two side by side and adds
+  what self-hosting saved.
 EOF
     exit 1
 }
@@ -194,15 +195,27 @@ provider_group_fragments() {
 
 # Cloud-equivalent cost columns, added only when CLOUD_RATES is configured —
 # with no rates the figure would just duplicate cost_usd on every row.
-# Writes globals: EQ_ROW (append at the end of a SELECT list), EQ_SUM_T /
-# EQ_SAVED_T (insert mid-list, trailing comma), EQ_ORDER (ranking key),
+# A row's cost column carries either real money or a cloud-equivalent estimate,
+# never both usefully, so they share one column. The marker is driven by whether
+# the figure actually contains an estimate (equiv != real), not by the cost being
+# zero: a genuine $0 exists — ccusage prices unknown models at zero — and calling
+# that an estimate would be a lie. The equivalent expression returns real cost
+# untouched for providers that are cloud services, so equality means "all real".
+#
+# Writes globals: EQ_COST_ROW / EQ_COST_SUM (the cost column itself), EQ_SUM_T /
+# EQ_SAVED_T (summary's side-by-side comparison), EQ_ORDER (ranking key),
 # EQ_BASIS (section-header note), EQ_CSV_COL (extra CSV column).
-EQ_ROW=""; EQ_SUM_T=""; EQ_SAVED_T=""; EQ_ORDER="SUM(cost_usd)"; EQ_BASIS=""
-EQ_CSV_COL=""
+EQ_COST_ROW="printf('\$%.2f', cost_usd) AS cost"
+EQ_COST_SUM="printf('\$%.2f', SUM(cost_usd)) AS total_cost"
+EQ_SUM_T=""; EQ_SAVED_T=""; EQ_ORDER="SUM(cost_usd)"; EQ_BASIS=""; EQ_CSV_COL=""
 if EQ_EXPR=$(cloud_equiv_expr); then
     EQ_BASIS=" (ranked by cloud-equivalent cost)"
     EQ_CSV_COL=", $EQ_EXPR AS cloud_equivalent_usd"
-    EQ_ROW=", printf('\$%.2f', $EQ_EXPR) AS cloud_eq"
+    EQ_COST_ROW="CASE WHEN $EQ_EXPR = cost_usd THEN printf('\$%.2f', cost_usd)
+                      ELSE printf('\$%.2f (eq.)', $EQ_EXPR) END AS cost"
+    EQ_COST_SUM="CASE WHEN SUM($EQ_EXPR) = SUM(cost_usd) THEN printf('\$%.2f', SUM(cost_usd))
+                      ELSE printf('\$%.2f (eq.)', SUM($EQ_EXPR)) END AS total_cost"
+    # summary keeps the two apart — contrasting them is that section's whole job.
     EQ_SUM_T="printf('\$%.2f', SUM($EQ_EXPR)) AS cloud_eq,"
     EQ_SAVED_T="printf('\$%.2f', SUM($EQ_EXPR) - SUM(cost_usd)) AS saved,"
     # Ranking by real cost is meaningless when every self-hosted row is $0.
@@ -231,7 +244,7 @@ SELECT
     printf('%,d', output_tokens) AS output_tok,
     printf('%,d', cache_creation_tokens) AS cache_create,
     printf('%,d', cache_read_tokens) AS cache_read,
-    printf('\$%.2f', cost_usd) AS cost${EQ_ROW}
+    ${EQ_COST_ROW}
 FROM daily_usage
 WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
 ${prov_clause}
@@ -254,8 +267,7 @@ SELECT
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    ${EQ_SUM_T}
+    ${EQ_COST_SUM},
     COUNT(DISTINCT model) AS models
 FROM daily_usage
 WHERE date >= date('now', '-$((LAST_VAL - 1)) days')
@@ -280,8 +292,7 @@ SELECT
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    ${EQ_SUM_T}
+    ${EQ_COST_SUM},
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM daily_usage
@@ -315,8 +326,7 @@ SELECT
     printf('%,d', SUM(output_tokens)) AS output_tok,
     printf('%,d', SUM(cache_creation_tokens)) AS cache_create,
     printf('%,d', SUM(cache_read_tokens)) AS cache_read,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    ${EQ_SUM_T}
+    ${EQ_COST_SUM},
     printf('\$%.2f', SUM(cost_usd) / COUNT(DISTINCT date)) AS avg_daily_cost,
     COUNT(DISTINCT date) AS active_days
 FROM base
@@ -355,8 +365,7 @@ SELECT '▼ min', date, printf('\$%.2f', total) FROM (
     query_table "
 SELECT
     model,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    ${EQ_SUM_T}
+    ${EQ_COST_SUM},
     printf('%.1f%%', ${EQ_ORDER} * 100.0 / NULLIF((SELECT ${EQ_ORDER} FROM daily_usage), 0)) AS pct,
     COUNT(DISTINCT date) AS days_used
 FROM daily_usage
@@ -368,8 +377,7 @@ ORDER BY ${EQ_ORDER} DESC;
     query_table "
 SELECT
     provider,
-    printf('\$%.2f', SUM(cost_usd)) AS total_cost,
-    ${EQ_SUM_T}
+    ${EQ_COST_SUM},
     printf('%.1f%%', ${EQ_ORDER} * 100.0 / NULLIF((SELECT ${EQ_ORDER} FROM daily_usage), 0)) AS pct,
     COUNT(DISTINCT date) AS days_used
 FROM daily_usage
