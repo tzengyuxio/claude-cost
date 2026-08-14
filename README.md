@@ -99,6 +99,23 @@ To collect only Claude Code usage (no Codex), set:
 ENABLED_PROVIDERS="claude"
 ```
 
+### Multiple Claude subscriptions
+
+One machine can hold more than one Claude subscription: a directory tree points Claude
+Code at its own config dir by exporting `CLAUDE_CONFIG_DIR` (e.g. in a `.envrc`), so that
+account's sessions land there instead of `~/.claude`. List those accounts to collect each
+as its own provider:
+
+```sh
+CLAUDE_EXTRA_ACCOUNTS="claude-work:$HOME/.claude-work"
+ENABLED_PROVIDERS="claude codex claude-work"
+```
+
+Each entry defines a provider reading that config dir, with its own watermark — so a newly
+added account backfills its whole history independently. Reports can then split the
+accounts (`daily-total --by-provider`, `--provider claude-work`) or read the combined
+total as usual.
+
 ### Self-hosted inference providers
 
 Two extra providers track a self-hosted inference box instead of CLI usage. They are

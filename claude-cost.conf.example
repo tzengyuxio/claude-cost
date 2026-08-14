@@ -16,6 +16,14 @@ CCUSAGE_VERSION="18.0.10"
 # Default: claude
 ENABLED_PROVIDERS="claude"
 
+# Additional Claude subscriptions on the same machine.
+# A directory tree can point Claude Code at its own config dir by exporting
+# CLAUDE_CONFIG_DIR, so a second account's sessions never land in ~/.claude.
+# Each entry here becomes its own provider reading that dir; add the provider
+# name to ENABLED_PROVIDERS to collect it.
+# Format: <provider>:<config-dir>, space-separated.
+#CLAUDE_EXTRA_ACCOUNTS="claude-work:$HOME/.claude-work"
+
 # Pinned @ccusage/codex version (npm package)
 # Default: 18.0.10
 CCUSAGE_CODEX_VERSION="18.0.10"

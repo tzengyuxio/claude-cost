@@ -177,6 +177,42 @@ JSON
     exit 0
 fi
 
+# Alternate Claude account: ccusage resolves its data dir from CLAUDE_CONFIG_DIR,
+# so the mock keys off it to prove each account is fetched from its own dir.
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    if [[ $is_blocks -eq 1 ]]; then
+        echo '{"blocks": []}'
+        exit 0
+    fi
+    cat <<'JSON'
+{
+  "daily": [
+    {
+      "date": "2026-01-15",
+      "inputTokens": 400,
+      "outputTokens": 100,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "totalTokens": 500,
+      "totalCost": 3.25,
+      "modelsUsed": ["claude-alt-model"],
+      "modelBreakdowns": [
+        {
+          "modelName": "claude-alt-model",
+          "inputTokens": 400,
+          "outputTokens": 100,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 3.25
+        }
+      ]
+    }
+  ]
+}
+JSON
+    exit 0
+fi
+
 # Default: Claude mock
 cat <<'JSON'
 {
@@ -242,7 +278,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/18] Testing first collection (claude + codex)..."
+echo "[1/19] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -254,7 +290,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/18] Testing idempotent re-run..."
+echo "[2/19] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -265,7 +301,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/18] Testing report summary (claude total \$4.25)..."
+echo "[3/19] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -277,7 +313,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/18] Testing weekly report..."
+echo "[4/19] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -288,7 +324,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/18] Testing CSV export..."
+echo "[5/19] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -301,7 +337,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/18] Testing codex rows in DB..."
+echo "[6/19] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -311,7 +347,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/18] Testing codex cost allocation for Jan 16..."
+echo "[7/19] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -323,7 +359,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/18] Testing summary contains 'Cost by Provider'..."
+echo "[8/19] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -334,7 +370,7 @@ else
 fi
 
 # --- Test 9: Hourly rows inserted ---
-echo "[9/18] Testing hourly_usage rows (gap block filtered out)..."
+echo "[9/19] Testing hourly_usage rows (gap block filtered out)..."
 HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
 # Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
 if [ "$HOURLY_ROWS" -eq 3 ]; then
@@ -346,7 +382,7 @@ else
 fi
 
 # --- Test 10: Hourly watermark set ---
-echo "[10/18] Testing hourly watermark set to 2026-01-16..."
+echo "[10/19] Testing hourly watermark set to 2026-01-16..."
 HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
 if [ "$HOURLY_WM" = "2026-01-16" ]; then
     echo "  PASS: hourly watermark = $HOURLY_WM"
@@ -356,7 +392,7 @@ else
 fi
 
 # --- Test 11: by-hour report contains expected hour buckets ---
-echo "[11/18] Testing by-hour report shows hours 09 / 10 / 14..."
+echo "[11/19] Testing by-hour report shows hours 09 / 10 / 14..."
 BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
 if echo "$BY_HOUR" | grep -q '09:00' \
    && echo "$BY_HOUR" | grep -q '10:00' \
@@ -385,7 +421,7 @@ else
 fi
 
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
-echo "[12/18] Testing by-weekday-hour heatmap has 7 weekday rows..."
+echo "[12/19] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
 WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
 if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
@@ -410,7 +446,7 @@ else
 fi
 
 # --- Test 13: Migration from old schema ---
-echo "[13/18] Testing schema migration from old (no provider column) schema..."
+echo "[13/19] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -481,7 +517,7 @@ else
 fi
 
 # --- Test 14: Codex reasoning tokens are not double-counted ---
-echo "[14/18] Testing codex reasoning tokens are not double-counted..."
+echo "[14/19] Testing codex reasoning tokens are not double-counted..."
 # reasoningOutputTokens is a subset of outputTokens (totalTokens == inputTokens + outputTokens),
 # so it must not be added on top. Jan 15 gpt-test-model: output=100, reasoning=20 -> expect 100.
 CODEX_OUT=$(sqlite3 "$DB" "SELECT output_tokens FROM daily_usage WHERE provider='codex' AND date='2026-01-15' AND model='gpt-test-model';")
@@ -493,7 +529,7 @@ else
 fi
 
 # --- Test 15: Oversized rollout files are warned about ---
-echo "[15/18] Testing oversized rollout warning..."
+echo "[15/19] Testing oversized rollout warning..."
 # @ccusage/codex silently skips rollout files it cannot read, returning exit 0
 # with that session's usage missing entirely. Warn so the gap is visible.
 mkdir -p "$HOME/.codex/sessions/2026/01/15"
@@ -525,7 +561,7 @@ else
 fi
 
 # --- Tests 16-17: litellm + openwebui providers (isolated environment) ---
-echo "[16/18] Testing litellm + openwebui collection..."
+echo "[16/19] Testing litellm + openwebui collection..."
 
 HIKARI_DIR="$TEST_DIR/hikari"
 export HOME="$HIKARI_DIR/home"
@@ -596,7 +632,7 @@ else
 fi
 
 # --- Test 17: idempotent re-run, watermarks advanced, report survives $0 cost ---
-echo "[17/18] Testing hikari providers re-run + watermarks + zero-cost report..."
+echo "[17/19] Testing hikari providers re-run + watermarks + zero-cost report..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 HIKARI_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage;")
 LITELLM_WM=$(sqlite3 "$HIKARI_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:litellm';")
@@ -628,7 +664,7 @@ else
 fi
 
 # --- Test 18: cloud-equivalent cost is reported without touching cost_usd ---
-echo "[18/18] Testing cloud-equivalent cost reporting..."
+echo "[18/19] Testing cloud-equivalent cost reporting..."
 
 # Rates are $/M tokens. litellm 2026-01-16 claude-sonnet-5: 300 in / 400 out.
 #   claude-* → 1.00/5.00  =>  300*1.00/1e6 + 400*5.00/1e6 = 0.0023
@@ -704,5 +740,62 @@ else
     exit 1
 fi
 
+# --- Test 19: a second Claude subscription via CLAUDE_EXTRA_ACCOUNTS ---
+# Two subscriptions on one machine keep their sessions in separate config dirs
+# (the second tree exports CLAUDE_CONFIG_DIR). Each becomes its own provider so
+# the reports can split or combine them.
+echo "[19/19] Testing a second Claude account as its own provider..."
+
+ALT_DIR="$TEST_DIR/multi"
+export HOME="$ALT_DIR/home"
+export XDG_CONFIG_HOME="$ALT_DIR/config"
+mkdir -p "$HOME/.local/share/claude-cost/logs"
+mkdir -p "$XDG_CONFIG_HOME/claude-cost"
+cat > "$XDG_CONFIG_HOME/claude-cost/config" <<EOF
+TIMEZONE="UTC"
+ENABLED_PROVIDERS="claude claude-alt"
+CLAUDE_EXTRA_ACCOUNTS="claude-alt:$ALT_DIR/.claude-alt bogus-entry"
+EOF
+
+ALT_DB="$HOME/.local/share/claude-cost/usage.db"
+ALT_OUT=$(bash "$REPO_DIR/bin/claude-cost-collect" 2>&1)
+
+ALT_MAIN=$(sqlite3 "$ALT_DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='claude';")
+ALT_SECOND=$(sqlite3 "$ALT_DB" "SELECT model || '/' || cost_usd FROM daily_usage WHERE provider='claude-alt';")
+if [ "$ALT_MAIN" -eq 3 ] && [ "$ALT_SECOND" = "claude-alt-model/3.25" ]; then
+    echo "  PASS: both accounts collected as separate providers"
+else
+    echo "  FAIL: claude rows=$ALT_MAIN claude-alt='$ALT_SECOND'"
+    sqlite3 "$ALT_DB" "SELECT * FROM daily_usage;"
+    exit 1
+fi
+
+# Each account carries its own watermark, so they backfill independently.
+ALT_WM=$(sqlite3 "$ALT_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:claude-alt';")
+if [ "$ALT_WM" = "2026-01-15" ]; then
+    echo "  PASS: claude-alt has its own watermark ($ALT_WM)"
+else
+    echo "  FAIL: expected claude-alt watermark 2026-01-15, got '$ALT_WM'"
+    exit 1
+fi
+
+# A malformed entry must warn and be skipped, not abort the run.
+if echo "$ALT_OUT" | grep -q "malformed CLAUDE_EXTRA_ACCOUNTS" \
+   || grep -q "malformed CLAUDE_EXTRA_ACCOUNTS" "$HOME/.local/share/claude-cost/logs/collect.log"; then
+    echo "  PASS: malformed CLAUDE_EXTRA_ACCOUNTS entry warned and skipped"
+else
+    echo "  FAIL: no warning for the malformed entry"
+    exit 1
+fi
+
+ALT_REPORT=$(bash "$REPO_DIR/bin/claude-cost-report" daily-total --last 9999 --by-provider 2>&1)
+if echo "$ALT_REPORT" | grep -q 'claude-alt' && echo "$ALT_REPORT" | grep -qE '[0-9]{2} +claude +'; then
+    echo "  PASS: --by-provider splits the two subscriptions"
+else
+    echo "  FAIL: by-provider report missing one of the accounts"
+    echo "$ALT_REPORT"
+    exit 1
+fi
+
 echo ""
-echo "=== All 18 tests passed ==="
+echo "=== All 19 tests passed ==="
