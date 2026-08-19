@@ -141,8 +141,9 @@ calls `npx`. Local inference has no prompt cache and costs nothing directly, so
 ### Cloud-equivalent cost
 
 Since self-hosted rows cost $0, the interesting number is what that traffic *would*
-have cost on a hosted API. Set a rate table and the reports gain a `cloud_eq` column
-next to `cost`, plus a `saved` figure in `summary`:
+have cost on a hosted API. Set a rate table and a self-hosted row's `cost` column
+carries that estimate instead, marked `(eq.)`; `summary` keeps real and equivalent
+cost side by side and adds a `saved` figure:
 
 ```sh
 # <model-glob>:<input $/M>:<output $/M>, first match wins
@@ -153,8 +154,9 @@ CLOUD_RATE_DEFAULT="0.07:0.67"
 Rates are applied when the report runs, never stored, so revising one re-values the
 whole history at once. `cost_usd` keeps meaning real money, and rows from providers
 that genuinely are cloud services (`claude`, `codex`) use their actual cost as their
-equivalent — so the two remain comparable in a mixed database. Leave `CLOUD_RATES`
-unset and the extra columns never appear.
+equivalent, and stay unmarked — so the two remain comparable in a mixed database and
+an unmarked figure always means real money. Leave `CLOUD_RATES` unset and nothing
+about the reports changes.
 
 After changing schedule settings, reload:
 
