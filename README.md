@@ -188,6 +188,9 @@ claude-cost-report by-hour
 # 7×24 weekday/hour heatmap (last 28 days by default)
 claude-cost-report by-weekday-hour
 
+# ...for one account only, when several Claude subscriptions are tracked
+claude-cost-report by-hour --provider claude-work
+
 # Overall summary with top models
 claude-cost-report summary
 
@@ -195,7 +198,7 @@ claude-cost-report summary
 claude-cost-report csv --output costs.csv
 ```
 
-> **Note:** `by-hour` and `by-weekday-hour` read from the separate `hourly_usage` table, populated only for the `claude` provider (ccusage's `blocks` subcommand). Codex CLI exposes no hourly granularity, so it is not represented in these reports.
+> **Note:** `by-hour` and `by-weekday-hour` read from the separate `hourly_usage` table, populated for every Claude account — the default `claude` provider and any added via `CLAUDE_EXTRA_ACCOUNTS` (ccusage's `blocks` subcommand). Codex CLI exposes no hourly granularity, so it is not represented in these reports. With more than one account the hours are combined by default, which is usually what you want from a "when am I active" view; `--provider` narrows to one account. `--by-provider` does not apply here — these reports aggregate by hour, not by row.
 >
 > These two reports display hours in `REPORT_TIMEZONE` (defaults to `TIMEZONE`), re-projecting the stored hours at query time without re-bucketing — so you can keep storage in UTC yet read the heatmap in local time. The other reports (`daily` / `weekly` / `monthly`) are date-bucketed in `TIMEZONE` at collection time and have no hour granularity to shift, so they stay in the storage timezone.
 

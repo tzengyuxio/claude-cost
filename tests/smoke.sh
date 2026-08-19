@@ -94,6 +94,67 @@ JSON
     fi
 done
 
+# Alternate Claude account: ccusage resolves its data dir from CLAUDE_CONFIG_DIR,
+# so the mock keys off it to prove each account is fetched from its own dir.
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    if [[ $is_blocks -eq 1 ]]; then
+        # A distinctive hour (20:00) the default account never uses, so the
+        # hour reports can be told apart per account.
+        cat <<'JSON'
+{
+  "blocks": [
+    {
+      "id": "2026-01-15T20:00:00.000Z",
+      "startTime": "2026-01-15T20:00:00.000Z",
+      "endTime": "2026-01-15T21:00:00.000Z",
+      "actualEndTime": "2026-01-15T20:20:00.000Z",
+      "isActive": false,
+      "isGap": false,
+      "entries": 2,
+      "tokenCounts": {
+        "inputTokens": 400,
+        "outputTokens": 100,
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0
+      },
+      "totalTokens": 500,
+      "costUSD": 3.25,
+      "models": ["claude-alt-model"]
+    }
+  ]
+}
+JSON
+        exit 0
+    fi
+    cat <<'JSON'
+{
+  "daily": [
+    {
+      "date": "2026-01-15",
+      "inputTokens": 400,
+      "outputTokens": 100,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "totalTokens": 500,
+      "totalCost": 3.25,
+      "modelsUsed": ["claude-alt-model"],
+      "modelBreakdowns": [
+        {
+          "modelName": "claude-alt-model",
+          "inputTokens": 400,
+          "outputTokens": 100,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 3.25
+        }
+      ]
+    }
+  ]
+}
+JSON
+    exit 0
+fi
+
 # Claude blocks mock (hourly)
 if [ "$is_blocks" -eq 1 ]; then
     cat <<'JSON'
@@ -170,42 +231,6 @@ if [ "$is_blocks" -eq 1 ]; then
       "totalTokens": 8500,
       "costUSD": 1.25,
       "models": ["claude-test-model", "claude-other-model"]
-    }
-  ]
-}
-JSON
-    exit 0
-fi
-
-# Alternate Claude account: ccusage resolves its data dir from CLAUDE_CONFIG_DIR,
-# so the mock keys off it to prove each account is fetched from its own dir.
-if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
-    if [[ $is_blocks -eq 1 ]]; then
-        echo '{"blocks": []}'
-        exit 0
-    fi
-    cat <<'JSON'
-{
-  "daily": [
-    {
-      "date": "2026-01-15",
-      "inputTokens": 400,
-      "outputTokens": 100,
-      "cacheCreationTokens": 0,
-      "cacheReadTokens": 0,
-      "totalTokens": 500,
-      "totalCost": 3.25,
-      "modelsUsed": ["claude-alt-model"],
-      "modelBreakdowns": [
-        {
-          "modelName": "claude-alt-model",
-          "inputTokens": 400,
-          "outputTokens": 100,
-          "cacheCreationTokens": 0,
-          "cacheReadTokens": 0,
-          "cost": 3.25
-        }
-      ]
     }
   ]
 }
@@ -785,6 +810,21 @@ if echo "$ALT_OUT" | grep -q "malformed CLAUDE_EXTRA_ACCOUNTS" \
     echo "  PASS: malformed CLAUDE_EXTRA_ACCOUNTS entry warned and skipped"
 else
     echo "  FAIL: no warning for the malformed entry"
+    exit 1
+fi
+
+# The hour reports aggregate by hour, so several accounts combine by default;
+# --provider narrows them to one. Only the alt account logs an hour at 20:00.
+ALT_HOURS=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 --provider claude-alt 2>&1)
+ALL_HOURS=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
+if echo "$ALT_HOURS" | grep -q '20:00' && ! echo "$ALT_HOURS" | grep -q '09:00' \
+   && echo "$ALT_HOURS" | grep -q 'provider=claude-alt' \
+   && echo "$ALL_HOURS" | grep -q '20:00' && echo "$ALL_HOURS" | grep -q '09:00'; then
+    echo "  PASS: by-hour --provider isolates one account; unfiltered combines both"
+else
+    echo "  FAIL: by-hour provider filtering"
+    echo "$ALT_HOURS"
+    echo "$ALL_HOURS"
     exit 1
 fi
 
