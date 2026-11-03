@@ -522,10 +522,10 @@ cmd_csv() {
     local query="SELECT date, provider, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd${EQ_CSV_COL} FROM daily_usage ORDER BY date, provider, model;"
 
     if [ -n "$output" ]; then
-        sqlite3 -header -csv "$DB" "$query" > "$output"
+        sqlite3 -csv -header "$DB" "$query" > "$output"
         echo "Exported to $output"
     else
-        sqlite3 -header -csv "$DB" "$query"
+        sqlite3 -csv -header "$DB" "$query"
     fi
 }
 
