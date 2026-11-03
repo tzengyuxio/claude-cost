@@ -8,6 +8,31 @@
 # code at a different dir and labelling the rows with a different provider —
 # see CLAUDE_EXTRA_ACCOUNTS at the bottom of this file.
 
+# _ccusage <config_dir> <outfile> <errfile> <ccusage args...>
+# Runs ccusage under the given config dir (empty ⇒ ccusage's default), retrying
+# once on failure. ccusage lists the session JSONL up front and reads them later,
+# so a session deleted in between (e.g. by another Claude Code process) aborts
+# the whole run with ENOENT; the second pass no longer lists that file.
+_ccusage() {
+    local config_dir="$1" out="$2" err="$3"
+    shift 3
+    local attempt
+    for attempt in 1 2; do
+        # Subshell so the CLAUDE_CONFIG_DIR override does not leak into the next provider.
+        if (
+            if [[ -n "$config_dir" ]]; then export CLAUDE_CONFIG_DIR="$config_dir"; fi
+            npx "ccusage@${CCUSAGE_VERSION}" "$@"
+        ) > "$out" 2> "$err"; then
+            return 0
+        fi
+        if [[ $attempt -eq 1 ]]; then
+            echo "WARN: ccusage $1 failed, retrying once" >&2
+            head -n 5 "$err" | sed 's/^/  | /' >&2
+        fi
+    done
+    return 1
+}
+
 # _claude_daily <provider> <config_dir> <last_watermark> <yesterday>
 # config_dir empty ⇒ ccusage's own default (~/.claude).
 # Outputs TSV: date, provider, model, input, output, cache_creation, cache_read, cost
@@ -20,11 +45,7 @@ _claude_daily() {
     tmpfile=$(mktemp)
     errfile=$(mktemp)
 
-    # Subshell so the CLAUDE_CONFIG_DIR override does not leak into the next provider.
-    if ! (
-        if [[ -n "$config_dir" ]]; then export CLAUDE_CONFIG_DIR="$config_dir"; fi
-        npx "ccusage@${CCUSAGE_VERSION}" daily --json --timezone "$TIMEZONE"
-    ) > "$tmpfile" 2> "$errfile"; then
+    if ! _ccusage "$config_dir" "$tmpfile" "$errfile" daily --json --timezone "$TIMEZONE"; then
         echo "ERROR: ccusage (${provider}) failed" >&2
         [[ -s "$errfile" ]] && sed 's/^/  | /' "$errfile" >&2
         rm -f "$tmpfile" "$errfile"
@@ -79,12 +100,9 @@ _claude_hourly() {
         since_args="--since $since_arg"
     fi
 
-    if ! (
-        if [[ -n "$config_dir" ]]; then export CLAUDE_CONFIG_DIR="$config_dir"; fi
-        # shellcheck disable=SC2086  # intentional word-splitting for optional flag
-        npx "ccusage@${CCUSAGE_VERSION}" blocks --json -n 1 \
-            --timezone "$TIMEZONE" $since_args
-    ) > "$tmpfile" 2> "$errfile"; then
+    # shellcheck disable=SC2086  # intentional word-splitting for optional flag
+    if ! _ccusage "$config_dir" "$tmpfile" "$errfile" blocks --json -n 1 \
+        --timezone "$TIMEZONE" $since_args; then
         echo "ERROR: ccusage blocks (${provider} hourly) failed" >&2
         [[ -s "$errfile" ]] && sed 's/^/  | /' "$errfile" >&2
         rm -f "$tmpfile" "$errfile"
