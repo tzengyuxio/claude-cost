@@ -28,7 +28,7 @@ fetch_codex() {
     warn_oversized_rollouts
 
     local offline_flag=""
-    if [[ "${CODEX_OFFLINE:-1}" == "1" ]]; then
+    if [[ "${CODEX_OFFLINE:-0}" == "1" ]]; then
         offline_flag="--offline"
     fi
 

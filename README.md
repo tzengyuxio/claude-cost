@@ -81,7 +81,7 @@ REPORT_TIMEZONE="Asia/Taipei"    # Display zone for by-hour / by-weekday-hour (d
 CCUSAGE_VERSION="18.0.10"        # Pinned ccusage (Claude) version
 CCUSAGE_CODEX_VERSION="18.0.10"  # Pinned @ccusage/codex version
 ENABLED_PROVIDERS="claude codex" # Space-separated list of active providers
-CODEX_OFFLINE=1                  # Pass --offline to codex fetcher (default: 1)
+CODEX_OFFLINE=0                  # 1 = --offline: bundled prices, newer models cost $0 (default: 0)
 SCHEDULE_HOUR=2                  # Collection start hour (default: 2)
 SCHEDULE_MINUTE=0                # Collection minute (default: 0)
 SCHEDULE_INTERVAL_HOURS=6        # Re-run every N hours from SCHEDULE_HOUR; 24 = once daily (default: 6)

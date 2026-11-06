@@ -29,8 +29,10 @@ ENABLED_PROVIDERS="claude"
 CCUSAGE_CODEX_VERSION="18.0.10"
 
 # Use cached pricing data for Codex (1=offline, 0=fetch from LiteLLM)
-# Default: 1
-CODEX_OFFLINE=1
+# Offline uses the price table bundled with the pinned version, which prices
+# models released after it at $0. Without network, online falls back to it.
+# Default: 0
+CODEX_OFFLINE=0
 
 # Warn when a Codex rollout .jsonl exceeds this size — @ccusage/codex silently
 # skips files it cannot read, so the day's cost is understated without notice.
