@@ -38,6 +38,17 @@ if [[ -n "${MOCK_FAIL_ONCE:-}" && -e "$MOCK_FAIL_ONCE" ]]; then
     echo "[Error: ENOENT: no such file or directory, open 'gone.jsonl']" >&2
     exit 1
 fi
+
+# Price every token at $0 and still exit 0, the way real ccusage behaves when
+# its price download fails and it falls back to the bundled table.
+if [[ -n "${MOCK_ZERO_COST:-}" && "$*" != *"@ccusage/codex@"* ]]; then
+    if [[ " $* " == *" blocks "* ]]; then
+        echo '{"blocks":[{"id":"b","startTime":"2026-01-15T09:00:00.000Z","isActive":false,"isGap":false,"entries":3,"tokenCounts":{"inputTokens":10,"outputTokens":5,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUSD":0}]}'
+    else
+        echo '{"daily":[{"date":"2026-01-15","modelBreakdowns":[{"modelName":"claude-new","inputTokens":10,"outputTokens":5,"cacheCreationTokens":0,"cacheReadTokens":0,"cost":0}]}]}'
+    fi
+    exit 0
+fi
 is_blocks=0
 for arg in "$@"; do
     [[ "$arg" == "blocks" ]] && is_blocks=1
@@ -311,7 +322,7 @@ DB="$HOME/.local/share/claude-cost/usage.db"
 
 # --- Test 1: First collection ---
 echo ""
-echo "[1/20] Testing first collection (claude + codex)..."
+echo "[1/21] Testing first collection (claude + codex)..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 # claude: 3 rows (jan15×1 model + jan16×2 models); codex: 3 rows (jan15×1 + jan16×2) = 6 total
@@ -323,7 +334,7 @@ else
 fi
 
 # --- Test 2: Idempotent re-run ---
-echo "[2/20] Testing idempotent re-run..."
+echo "[2/21] Testing idempotent re-run..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 ROWS2=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage;")
 if [ "$ROWS2" -eq 6 ]; then
@@ -334,7 +345,7 @@ else
 fi
 
 # --- Test 3: Report summary ---
-echo "[3/20] Testing report summary (claude total \$4.25)..."
+echo "[3/21] Testing report summary (claude total \$4.25)..."
 OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 # Claude cost: 1.50 + 2.00 + 0.75 = 4.25; Codex cost: 0.50 + 1.20 = 1.70; Grand total: 5.95
 if echo "$OUTPUT" | grep -q '\$5.95'; then
@@ -346,7 +357,7 @@ else
 fi
 
 # --- Test 4: Weekly report ---
-echo "[4/20] Testing weekly report..."
+echo "[4/21] Testing weekly report..."
 WEEKLY_OUTPUT=$(bash "$REPO_DIR/bin/claude-cost-report" weekly --last 520 2>&1)
 if echo "$WEEKLY_OUTPUT" | grep -q '2026-W03'; then
     echo "  PASS: ISO week 2026-W03 found in weekly report"
@@ -357,7 +368,7 @@ else
 fi
 
 # --- Test 5: CSV export ---
-echo "[5/20] Testing CSV export..."
+echo "[5/21] Testing CSV export..."
 CSV_FILE="$TEST_DIR/export.csv"
 bash "$REPO_DIR/bin/claude-cost-report" csv --output "$CSV_FILE"
 CSV_LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')
@@ -370,7 +381,7 @@ else
 fi
 
 # --- Test 6: Codex rows exist ---
-echo "[6/20] Testing codex rows in DB..."
+echo "[6/21] Testing codex rows in DB..."
 CODEX_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='codex';")
 if [ "$CODEX_ROWS" -eq 3 ]; then
     echo "  PASS: 3 codex rows (jan15×1 + jan16×2)"
@@ -380,7 +391,7 @@ else
 fi
 
 # --- Test 7: Codex cost allocation for Jan 16 ---
-echo "[7/20] Testing codex cost allocation for Jan 16..."
+echo "[7/21] Testing codex cost allocation for Jan 16..."
 CODEX_JAN16=$(sqlite3 "$DB" "SELECT SUM(cost_usd) FROM daily_usage WHERE provider='codex' AND date='2026-01-16';")
 # Expected: gpt-test-model (840/1200 * 1.20 = 0.84) + gpt-other-model (360/1200 * 1.20 = 0.36) = 1.20
 OK=$(awk -v val="$CODEX_JAN16" 'BEGIN { diff = val - 1.20; if (diff < 0) diff = -diff; print (diff <= 0.01) ? "yes" : "no" }')
@@ -392,7 +403,7 @@ else
 fi
 
 # --- Test 8: Summary contains Cost by Provider ---
-echo "[8/20] Testing summary contains 'Cost by Provider'..."
+echo "[8/21] Testing summary contains 'Cost by Provider'..."
 SUMMARY=$(bash "$REPO_DIR/bin/claude-cost-report" summary 2>&1)
 if echo "$SUMMARY" | grep -q 'Cost by Provider'; then
     echo "  PASS: 'Cost by Provider' section found in summary"
@@ -403,7 +414,7 @@ else
 fi
 
 # --- Test 9: Hourly rows inserted ---
-echo "[9/20] Testing hourly_usage rows (gap block filtered out)..."
+echo "[9/21] Testing hourly_usage rows (gap block filtered out)..."
 HOURLY_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM hourly_usage WHERE provider='claude';")
 # Mock has 4 blocks; one is isGap=true → 3 real rows: jan15 09, jan15 14, jan16 10
 if [ "$HOURLY_ROWS" -eq 3 ]; then
@@ -415,7 +426,7 @@ else
 fi
 
 # --- Test 10: Hourly watermark set ---
-echo "[10/20] Testing hourly watermark set to 2026-01-16..."
+echo "[10/21] Testing hourly watermark set to 2026-01-16..."
 HOURLY_WM=$(sqlite3 "$DB" "SELECT value FROM collect_metadata WHERE key='last_collected_hour:claude';")
 if [ "$HOURLY_WM" = "2026-01-16" ]; then
     echo "  PASS: hourly watermark = $HOURLY_WM"
@@ -425,7 +436,7 @@ else
 fi
 
 # --- Test 11: by-hour report contains expected hour buckets ---
-echo "[11/20] Testing by-hour report shows hours 09 / 10 / 14..."
+echo "[11/21] Testing by-hour report shows hours 09 / 10 / 14..."
 BY_HOUR=$(bash "$REPO_DIR/bin/claude-cost-report" by-hour --last 9999 2>&1)
 if echo "$BY_HOUR" | grep -q '09:00' \
    && echo "$BY_HOUR" | grep -q '10:00' \
@@ -454,7 +465,7 @@ else
 fi
 
 # --- Test 12: by-weekday-hour heatmap renders 7 weekday rows ---
-echo "[12/20] Testing by-weekday-hour heatmap has 7 weekday rows..."
+echo "[12/21] Testing by-weekday-hour heatmap has 7 weekday rows..."
 HEATMAP=$(bash "$REPO_DIR/bin/claude-cost-report" by-weekday-hour --last 9999 2>&1)
 WD_COUNT=$(echo "$HEATMAP" | grep -cE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \| ')
 if [ "$WD_COUNT" -eq 7 ] && echo "$HEATMAP" | grep -q 'Legend'; then
@@ -479,7 +490,7 @@ else
 fi
 
 # --- Test 13: Migration from old schema ---
-echo "[13/20] Testing schema migration from old (no provider column) schema..."
+echo "[13/21] Testing schema migration from old (no provider column) schema..."
 
 # Set up a separate isolated environment for migration test
 MIGRATE_DIR="$TEST_DIR/migrate"
@@ -550,7 +561,7 @@ else
 fi
 
 # --- Test 14: Codex reasoning tokens are not double-counted ---
-echo "[14/20] Testing codex reasoning tokens are not double-counted..."
+echo "[14/21] Testing codex reasoning tokens are not double-counted..."
 # reasoningOutputTokens is a subset of outputTokens (totalTokens == inputTokens + outputTokens),
 # so it must not be added on top. Jan 15 gpt-test-model: output=100, reasoning=20 -> expect 100.
 CODEX_OUT=$(sqlite3 "$DB" "SELECT output_tokens FROM daily_usage WHERE provider='codex' AND date='2026-01-15' AND model='gpt-test-model';")
@@ -562,7 +573,7 @@ else
 fi
 
 # --- Test 15: Oversized rollout files are warned about ---
-echo "[15/20] Testing oversized rollout warning..."
+echo "[15/21] Testing oversized rollout warning..."
 # @ccusage/codex silently skips rollout files it cannot read, returning exit 0
 # with that session's usage missing entirely. Warn so the gap is visible.
 mkdir -p "$HOME/.codex/sessions/2026/01/15"
@@ -594,7 +605,7 @@ else
 fi
 
 # --- Tests 16-17: litellm + openwebui providers (isolated environment) ---
-echo "[16/20] Testing litellm + openwebui collection..."
+echo "[16/21] Testing litellm + openwebui collection..."
 
 HIKARI_DIR="$TEST_DIR/hikari"
 export HOME="$HIKARI_DIR/home"
@@ -665,7 +676,7 @@ else
 fi
 
 # --- Test 17: idempotent re-run, watermarks advanced, report survives $0 cost ---
-echo "[17/20] Testing hikari providers re-run + watermarks + zero-cost report..."
+echo "[17/21] Testing hikari providers re-run + watermarks + zero-cost report..."
 bash "$REPO_DIR/bin/claude-cost-collect"
 HIKARI_ROWS=$(sqlite3 "$HIKARI_DB" "SELECT COUNT(*) FROM daily_usage;")
 LITELLM_WM=$(sqlite3 "$HIKARI_DB" "SELECT value FROM collect_metadata WHERE key='last_collected_date:litellm';")
@@ -697,7 +708,7 @@ else
 fi
 
 # --- Test 18: cloud-equivalent cost is reported without touching cost_usd ---
-echo "[18/20] Testing cloud-equivalent cost reporting..."
+echo "[18/21] Testing cloud-equivalent cost reporting..."
 
 # Rates are $/M tokens. litellm 2026-01-16 claude-sonnet-5: 300 in / 400 out.
 #   claude-* → 1.00/5.00  =>  300*1.00/1e6 + 400*5.00/1e6 = 0.0023
@@ -777,7 +788,7 @@ fi
 # Two subscriptions on one machine keep their sessions in separate config dirs
 # (the second tree exports CLAUDE_CONFIG_DIR). Each becomes its own provider so
 # the reports can split or combine them.
-echo "[19/20] Testing a second Claude account as its own provider..."
+echo "[19/21] Testing a second Claude account as its own provider..."
 
 ALT_DIR="$TEST_DIR/multi"
 export HOME="$ALT_DIR/home"
@@ -848,7 +859,7 @@ fi
 # --- Test 20: a transient ccusage failure is retried once ---
 # ccusage aborts the whole run when a session file is deleted mid-scan; one
 # retry recovers instead of skipping the provider until the next schedule.
-echo "[20/20] Testing a transient ccusage failure is retried..."
+echo "[20/21] Testing a transient ccusage failure is retried..."
 
 RETRY_DIR="$TEST_DIR/retry"
 export HOME="$RETRY_DIR/home"
@@ -868,7 +879,7 @@ unset MOCK_FAIL_ONCE
 RETRY_DB="$HOME/.local/share/claude-cost/usage.db"
 RETRY_LOG="$HOME/.local/share/claude-cost/logs/collect.log"
 RETRY_ROWS=$(sqlite3 "$RETRY_DB" "SELECT COUNT(*) FROM daily_usage WHERE provider='claude';")
-if [ "$RETRY_ROWS" -eq 3 ] && grep -q "WARN: ccusage daily failed, retrying once" "$RETRY_LOG" \
+if [ "$RETRY_ROWS" -eq 3 ] && grep -q "WARN: ccusage daily (claude) failed, retrying once" "$RETRY_LOG" \
    && ! grep -q "Fetcher failed" "$RETRY_LOG"; then
     echo "  PASS: first failure retried, 3 claude rows collected"
 else
@@ -877,5 +888,49 @@ else
     exit 1
 fi
 
+# --- Test 21: tokens priced at $0 are refused, not stored ---
+# A failed price download makes ccusage price newer models at $0 with exit 0.
+# The fetch must fail instead, so the watermark stays and a later run re-prices.
+echo "[21/21] Testing tokens priced at \$0 are refused..."
+
+ZERO_DIR="$TEST_DIR/zero"
+export HOME="$ZERO_DIR/home"
+export XDG_CONFIG_HOME="$ZERO_DIR/config"
+mkdir -p "$HOME/.local/share/claude-cost/logs"
+mkdir -p "$XDG_CONFIG_HOME/claude-cost"
+cat > "$XDG_CONFIG_HOME/claude-cost/config" <<'EOF'
+TIMEZONE="UTC"
+ENABLED_PROVIDERS="claude"
+EOF
+
+export MOCK_ZERO_COST=1
+bash "$REPO_DIR/bin/claude-cost-collect"
+unset MOCK_ZERO_COST
+
+ZERO_DB="$HOME/.local/share/claude-cost/usage.db"
+ZERO_LOG="$HOME/.local/share/claude-cost/logs/collect.log"
+ZERO_ROWS=$(sqlite3 "$ZERO_DB" "SELECT (SELECT COUNT(*) FROM daily_usage) + (SELECT COUNT(*) FROM hourly_usage);")
+ZERO_WM=$(sqlite3 "$ZERO_DB" "SELECT COUNT(*) FROM collect_metadata WHERE key LIKE '%:claude';")
+if [ "$ZERO_ROWS" -eq 0 ] && [ "$ZERO_WM" -eq 0 ] \
+   && grep -q 'ccusage (claude) priced tokens at \$0' "$ZERO_LOG" \
+   && grep -q 'ccusage blocks (claude hourly) priced tokens at \$0' "$ZERO_LOG" \
+   && grep -q "WARN: ccusage daily (claude) failed, retrying once" "$ZERO_LOG"; then
+    echo "  PASS: \$0 rows refused after a retry, no watermark set"
+else
+    echo "  FAIL: rows=$ZERO_ROWS watermarks=$ZERO_WM"
+    cat "$ZERO_LOG"
+    exit 1
+fi
+
+# Once prices come back, the next run collects the same days.
+bash "$REPO_DIR/bin/claude-cost-collect"
+ZERO_AFTER=$(sqlite3 "$ZERO_DB" "SELECT COUNT(*) FROM daily_usage WHERE cost_usd > 0;")
+if [ "$ZERO_AFTER" -eq 3 ]; then
+    echo "  PASS: next run with prices collects the refused days"
+else
+    echo "  FAIL: expected 3 priced rows after recovery, got $ZERO_AFTER"
+    exit 1
+fi
+
 echo ""
-echo "=== All 20 tests passed ==="
+echo "=== All 21 tests passed ==="

@@ -9,34 +9,58 @@
 # see CLAUDE_EXTRA_ACCOUNTS at the bottom of this file.
 
 # _ccusage <config_dir> <outfile> <errfile> <ccusage args...>
-# Runs ccusage under the given config dir (empty ⇒ ccusage's default), retrying
-# once on failure. ccusage lists the session JSONL up front and reads them later,
-# so a session deleted in between (e.g. by another Claude Code process) aborts
-# the whole run with ENOENT; the second pass no longer lists that file.
+# Runs ccusage under the given config dir (empty ⇒ ccusage's default).
 _ccusage() {
     local config_dir="$1" out="$2" err="$3"
     shift 3
-    local attempt
+    # Subshell so the CLAUDE_CONFIG_DIR override does not leak into the next provider.
+    (
+        if [[ -n "$config_dir" ]]; then export CLAUDE_CONFIG_DIR="$config_dir"; fi
+        npx "ccusage@${CCUSAGE_VERSION}" "$@"
+    ) > "$out" 2> "$err"
+}
+
+# _retry_once <label> <cmd> [args...]
+# Runs a whole fetch, retrying once when it fails. Both failures it guards are
+# usually gone on a second pass: ccusage lists the session JSONL up front and
+# reads them later, so a session deleted in between (e.g. by another Claude Code
+# process) aborts the run with ENOENT; and a failed price download makes
+# _check_priced reject the rows.
+_retry_once() {
+    local label="$1" out attempt
+    shift
     for attempt in 1 2; do
-        # Subshell so the CLAUDE_CONFIG_DIR override does not leak into the next provider.
-        if (
-            if [[ -n "$config_dir" ]]; then export CLAUDE_CONFIG_DIR="$config_dir"; fi
-            npx "ccusage@${CCUSAGE_VERSION}" "$@"
-        ) > "$out" 2> "$err"; then
+        if out=$("$@"); then
+            if [[ -n "$out" ]]; then printf '%s\n' "$out"; fi
             return 0
         fi
-        if [[ $attempt -eq 1 ]]; then
-            echo "WARN: ccusage $1 failed, retrying once" >&2
-            head -n 5 "$err" | sed 's/^/  | /' >&2
-        fi
+        if [[ $attempt -eq 1 ]]; then echo "WARN: ${label} failed, retrying once" >&2; fi
     done
+    return 1
+}
+
+# _check_priced <label> <tsv>
+# Fails when a row carries tokens but costs $0. ccusage prices from a table it
+# downloads at run time; when the download fails it falls back to the table
+# bundled with the pinned version, which lacks newer models, and still exits 0
+# without a warning. Such a row would be written once and never revisited, so it
+# is refused and the watermark stays put. Both TSV shapes (daily and hourly) keep
+# the four token columns at 4-7 and the cost at 8.
+_check_priced() {
+    local unpriced
+    unpriced=$(awk -F'\t' '($4 + $5 + $6 + $7) > 0 && $8 == 0 { print "  | " $1 " " $2 " " $3 }' <<< "$2")
+    [[ -z "$unpriced" ]] && return 0
+    echo "ERROR: $1 priced tokens at \$0 (price download failed?)" >&2
+    echo "$unpriced" >&2
     return 1
 }
 
 # _claude_daily <provider> <config_dir> <last_watermark> <yesterday>
 # config_dir empty ⇒ ccusage's own default (~/.claude).
 # Outputs TSV: date, provider, model, input, output, cache_creation, cache_read, cost
-_claude_daily() {
+_claude_daily() { _retry_once "ccusage daily (${1})" _claude_daily_once "$@"; }
+
+_claude_daily_once() {
     local provider="$1"
     local config_dir="$2"
     local last="$3"
@@ -60,7 +84,8 @@ _claude_daily() {
         return 1
     fi
 
-    jq -r --arg yesterday "$yesterday" --arg last "${last:-}" --arg provider "$provider" '
+    local rows
+    rows=$(jq -r --arg yesterday "$yesterday" --arg last "${last:-}" --arg provider "$provider" '
         .daily[]
         | select(.date <= $yesterday)
         | select($last == "" or .date > $last)
@@ -73,8 +98,10 @@ _claude_daily() {
            (.cacheReadTokens // 0),
            (.cost // 0)]
         | @tsv
-    ' "$tmpfile"
+    ' "$tmpfile") || { rm -f "$tmpfile"; return 1; }
     rm -f "$tmpfile"
+    _check_priced "ccusage (${provider})" "$rows" || return 1
+    if [[ -n "$rows" ]]; then printf '%s\n' "$rows"; fi
 }
 
 # _claude_hourly <provider> <config_dir> <last_watermark> <yesterday>
@@ -84,7 +111,9 @@ _claude_daily() {
 # Runs online (no --offline) so ccusage looks up the pricing table and fills
 # costUSD for every block — matching the daily fetch. With --offline, blocks
 # reports only the sparse pre-embedded JSONL costs, leaving most hours at $0.
-_claude_hourly() {
+_claude_hourly() { _retry_once "ccusage blocks (${1} hourly)" _claude_hourly_once "$@"; }
+
+_claude_hourly_once() {
     local provider="$1"
     local config_dir="$2"
     local last="$3"
@@ -118,7 +147,8 @@ _claude_hourly() {
     fi
 
     # strflocaltime uses $TZ; export so the subshell inherits it.
-    TZ="$TIMEZONE" jq -r --arg yesterday "$yesterday" --arg last "${last:-}" --arg provider "$provider" '
+    local rows
+    rows=$(TZ="$TIMEZONE" jq -r --arg yesterday "$yesterday" --arg last "${last:-}" --arg provider "$provider" '
         .blocks[]
         | select(.isGap == false and .isActive == false)
         | (.startTime | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $epoch
@@ -134,8 +164,10 @@ _claude_hourly() {
            (.costUSD // 0),
            (.entries // 0)]
         | @tsv
-    ' "$tmpfile"
+    ' "$tmpfile") || { rm -f "$tmpfile"; return 1; }
     rm -f "$tmpfile"
+    _check_priced "ccusage blocks (${provider} hourly)" "$rows" || return 1
+    if [[ -n "$rows" ]]; then printf '%s\n' "$rows"; fi
 }
 
 # The default account: ccusage's own config-dir resolution, provider "claude".
